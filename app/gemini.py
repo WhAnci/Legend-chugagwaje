@@ -128,7 +128,7 @@ async def review_draft(raw: str, draft) -> list[str]:
 
 async def analyze_request(req: TaskRequest) -> str:
     prompt = f"""AWS 대회 추가과제 제작을 위한 요구사항 분석 담당자다.
-사용자 요청을 분석해 OpenCode Go 제작자에게 전달할 설계 메모를 JSON으로 반환하라.
+사용자 요청을 분석해 OpenCode Go 제작자에게 전달할 설계 메모를 JSON으로 반환하라. CloudShell은 채점 전용으로만 사용하며, 과제에서 Client나 실제 요청 발생기가 필요하면 EC2 Client 인스턴스 또는 지급파일을 설계한다.
 필드: topic, service_scope, difficulty, region, duration_minutes, scenario, required_components, behavior_tests, constraints, deliverables.
 주제가 없으면 예시와 가이드에 맞는 현실적인 주제 하나를 선정하라. Cognito, WebSocket, AppSync, WAF, CloudFront Functions, EventBridge Pipes 같은 특색 있는 서비스를 우선 검토하되 1시간 안에 검증 가능한 범위로 축소하라.
 반드시 1시간 이내, 총점 6점, 독립적으로 채점 가능한 핵심 AWS 리소스는 각각 별도 module로 분리하고 직접 연결된 보조 서비스만 포함하며, 직접 생성 리소스 10개 이하로 제한하라. 주제의 중심 리소스와 무관한 서비스는 추가하지 마라. EKS 과제는 EKS 클러스터를 중심으로 Kubernetes/CNCF 구성요소를 사용할 수 있다.

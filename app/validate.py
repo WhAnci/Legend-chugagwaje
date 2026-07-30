@@ -13,6 +13,8 @@ def validate(draft: TaskDraft) -> ValidationResult:
     all_text = "\n".join([assignment_source, draft.rubric_markdown, draft.grading_script] + [f.content for f in draft.deployment_files])
     if SECRET.search(all_text): errors.append("비밀정보 또는 자격증명 패턴이 포함되었습니다.")
     if not assignment_source.strip(): errors.append("과제지 내용이 비어 있습니다.")
+    if draft.document and re.search(r"cloudshell", assignment_source, re.I):
+        errors.append("CloudShell은 채점 스크립트 전용이며 과제 본문에 Client/구현 환경으로 포함할 수 없습니다.")
     if not draft.rubric_markdown.strip(): errors.append("채점기준표 내용이 비어 있습니다.")
     if not draft.document: errors.append("구조화된 document 객체가 없습니다.")
     if draft.document and not draft.document.modules: errors.append("구조화된 과제 문서에 modules가 없습니다.")

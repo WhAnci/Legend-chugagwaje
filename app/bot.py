@@ -67,7 +67,9 @@ async def create_job(raw: str):
         if candidate.lower() in raw.lower(): service = candidate; break
     difficulty = "고급" if "고급" in raw else "초급" if "초급" in raw else "중급"
     minutes = int(m.group(1)) if (m := re.search(r"(\d+)\s*분", raw)) else 60
-    region = m.group(1) if (m := re.search(r"(ap-[a-z-]+-\d+)", raw)) else os.getenv("DEFAULT_AWS_REGION", "")
+    # 사용자가 리전을 명시하지 않으면 AI가 서비스 특성에 맞는 리전을 선택한다.
+    # 기본값으로 서울 리전을 강제하지 않는다.
+    region = m.group(1) if (m := re.search(r"(ap-[a-z-]+-\d+)", raw)) else ""
     request = TaskRequest(raw=raw, service=service, difficulty=difficulty, duration_minutes=minutes, region=region)
     # DeepSeek: 요구사항 분석과 산출물 제작을 함께 담당한다. Gemini는 최종 검토만 한다.
     logger.info("generation backend=%s service=%s region=%s", os.getenv("AGENT_BACKEND", "opencode"), service, region or "unset")
