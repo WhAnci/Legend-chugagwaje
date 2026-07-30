@@ -220,7 +220,9 @@ class TaskDraft(BaseModel):
                 if module_id in modules_by_id:
                     check["module"] = modules_by_id[module_id].get("title", "")
                     continue
-                module_name = str(check.get("module", ""))
+                # 모델이 moduleId 자리에 서비스명/화면 제목을 잘못 넣어도
+                # 배열 인덱스로 취급하지 않고 module 후보명으로 재매칭한다.
+                module_name = str(check.get("module", "")) or ("" if module_id.isdigit() else module_id)
                 if module_name.isdigit():
                     expected = check.get("expected", {}) or {}
                     module_name = " ".join([str(x) for x in expected.keys()] + [str(x) for x in expected.values()])

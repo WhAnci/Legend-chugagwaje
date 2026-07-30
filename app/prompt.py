@@ -17,7 +17,7 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 필드: title, summary, document, checks, rubric_markdown, grading_script, deployment_files, notes.
 `document`는 아래 구조화 스키마를 따르며, 과제지 전체 Markdown/HTML을 생성하지 않는다. 각 deployment_files 원소는 path(string)와 content(string)를 가진다. `grading_script`는 반드시 실행 가능한 Shell 문자열 하나이며 path/content 객체로 감싸지 않는다.
 
-`checks`는 과제 본문·채점기준표·채점 스크립트의 단일 원본이다. 각 항목은 id(예: CF-01), moduleId, label, requirement, expected 객체, score, required(boolean), scriptCheck를 가진다. moduleId는 배열 인덱스나 PDF 번호가 아니라 각 module의 안정적인 문자열 ID를 사용한다. 모든 필수 최종 설정값과 실제 채점 조건을 checks에 먼저 기록한다. rubric_markdown에는 각 check의 id/label/expected/score/required를 그대로 반영하고, grading_script에는 각 check의 id와 scriptCheck 함수가 모두 구현되어야 한다.
+`checks`는 과제 본문·채점기준표·채점 스크립트의 단일 원본이다. 각 항목은 id(예: CF-01), moduleId, label, requirement, expected 객체, score, required(boolean), scriptCheck를 가진다. moduleId는 반드시 document.modules[].id와 정확히 같은 안정적인 문자열을 복사한다. `module`, 숫자 `0`, 배열 인덱스, PDF의 No 번호를 moduleId에 넣지 않는다. 모든 필수 최종 설정값과 실제 채점 조건을 checks에 먼저 기록한다. rubric_markdown에는 각 check의 id/label/expected/score/required를 그대로 반영하고, grading_script에는 각 check의 id와 scriptCheck 함수가 모두 구현되어야 한다.
 `document` 구조(JSON 타입을 엄격히 지킨다):
 - meta: document_title(string), year(number 또는 입력 원문), occupation(string), title(string), assignment_number(string), duration(string), region(string), candidate_number(string), judge_confirmation(string), mock(boolean).
 - overview: 과제 개요 2~3문장(string)
@@ -25,11 +25,12 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - requirements: 문자열 배열
 - precautions: 문자열 배열
 - provided_files: name, description 배열
-- modules: number, service, resourceType, title, description(1~3문단), fixedSpecs(label/value 배열), inferredConstraints(string 배열), specs(내부 호환용 선택 필드), dependencies, providedFiles
+- modules: id(영문 소문자 kebab-case 안정 ID, 예: `api-gateway`), number, service, resourceType, title, description(1~3문단), fixedSpecs(label/value 배열), inferredConstraints(string 배열), specs(내부 호환용 선택 필드), dependencies, providedFiles
 - assignment-level verification, cleanup만 최상위에서 관리한다. modules에는 sections를 사용하지 않는다.
 - module에는 tasks, notes, verification, instructions, stepByStep, implementationGuide 필드를 넣지 않는다.
 - 과제 본문 순서는 과제 개요 → 아키텍처 구성 → No module이다. overview와 architecture는 모든 module 앞에 한 번만 출력한다.
 - description은 서비스 목적·장애 상황·운영 이유·기대 동작을 1~3문단의 서술형으로 작성한다. 구현 방법이나 콘솔 절차는 쓰지 않는다.
+- JSON 반환 전 모든 checks.moduleId가 document.modules[].id 중 하나인지 자체 대조한다. moduleId가 없는 check를 만들지 않는다.
 - fixedSpecs에는 이름, 런타임, 핸들러, 환경 변수 키, 필수 경로, 필수 태그처럼 채점상 정확히 일치해야 하는 값만 넣는다. 일반적인 권장값과 판단 영역은 fixedSpecs에 넣지 않는다.
 - inferredConstraints에는 선수가 목적과 기대 동작을 보고 판단해야 하는 조건을 기록하되, PDF에서는 description에 자연스럽게 녹여 쓰고 별도 목록으로 출력하지 않는다. 모든 설정값을 specs에 나열하지 않는다.
 - 정확한 숫자를 숨긴 경우 grading checks는 허용 범위 또는 동작 기반으로 작성한다. 과제지에 근거가 없는 숨은 단일 채점값을 만들지 않는다.

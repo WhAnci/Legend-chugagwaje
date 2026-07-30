@@ -10,7 +10,7 @@ async def generate(req: TaskRequest) -> TaskDraft:
         try:
             return await run(req)
         except Exception as exc:
-            logger.warning("OpenCode unavailable (%s); switching to Gemini fallback", type(exc).__name__)
+            logger.warning("OpenCode unavailable (%s: %s); switching to Gemini fallback", type(exc).__name__, str(exc)[:500])
             # OpenCode Go의 일시적인 503/failover_exhausted로 전체 과제를 실패시키지 않는다.
             if os.getenv("OPENCODE_FALLBACK_GEMINI", "true").lower() == "true":
                 from .gemini import generate as fallback

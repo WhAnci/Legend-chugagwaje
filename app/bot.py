@@ -1,4 +1,4 @@
-import asyncio, json, logging, os, re, time, uuid
+import asyncio, json, logging, os, re, socket, time, uuid
 from dataclasses import dataclass
 from pathlib import Path
 import discord
@@ -202,15 +202,24 @@ async def stop_command(interaction: discord.Interaction):
         await cancel_job(jobs[0]); await interaction.response.send_message(f"⏹️ 작업 `{jobs[0].job_id[:8]}` 중지 요청을 보냈습니다.", ephemeral=True); return
     await interaction.response.send_message("중지할 작업을 선택하세요.", view=StopJobView(jobs, interaction.user.id), ephemeral=True)
 
-@bot.tree.command(name="로그", description="최근 과제 생성 작업 로그를 확인합니다.")
+def read_docker_logs() -> str:
+    import docker
+    client = docker.from_env()
+    name = os.getenv("DOCKER_CONTAINER_NAME", socket.gethostname())
+    container = client.containers.get(name)
+    return container.logs(tail=int(os.getenv("DOCKER_LOG_TAIL", "100")), timestamps=True).decode("utf-8", "replace")
+
+@bot.tree.command(name="로그", description="현재 bot 컨테이너의 Docker 로그를 확인합니다.")
 async def logs_command(interaction: discord.Interaction):
     if not has_authorized_role(interaction.user):
         await interaction.response.send_message("이 명령어는 지정된 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return
-    records = job_history[-15:]
-    if not records:
-        await interaction.response.send_message("📭 작업 로그가 없습니다.", ephemeral=True); return
-    text = "\n".join(f"`{x['job_id'][:8]}` {x['state']} <@{x['user_id']}> {x['detail']}" for x in records)
-    await interaction.response.send_message("🧾 최근 작업 로그\n" + text[:1900], ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        text = await asyncio.to_thread(read_docker_logs)
+        if not text: text = "Docker 로그가 없습니다."
+        await interaction.followup.send("🐳 Docker 로그 (최근 항목)\n```text\n" + text[-1750:] + "\n```", ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"Docker 로그를 읽을 수 없습니다: `{str(exc)[:500]}`", ephemeral=True)
 
 @bot.tree.command(name="도움말", description="봇 명령어 도움말을 표시합니다.")
 async def help_command(interaction: discord.Interaction):
