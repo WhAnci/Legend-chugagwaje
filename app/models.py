@@ -208,6 +208,13 @@ class TaskDraft(BaseModel):
                 if description and description in seen_descriptions:
                     module["description"] = f"{module.get('title', '이 module')}의 역할과 최종 상태를 구성합니다."
                 if description: seen_descriptions.add(description)
+            def sanitize_assignment_text(value):
+                if isinstance(value, str):
+                    return re.sub(r"cloud\\s*shell", "채점 실행 환경", value, flags=re.I)
+                if isinstance(value, list): return [sanitize_assignment_text(item) for item in value]
+                if isinstance(value, dict): return {key: sanitize_assignment_text(item) for key, item in value.items()}
+                return value
+            doc = sanitize_assignment_text(doc)
             data["document"] = doc
         checks = data.get("checks")
         if isinstance(checks, dict): checks = [checks]
