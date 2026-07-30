@@ -5,7 +5,7 @@ from .models import TaskDraft
 def _module_matches(expected: str, titles: set[str]) -> bool:
     if expected in titles: return True
     def canonical(value):
-        for source, target in {"aws systems manager":"ssm", "systems manager":"ssm", "amazon systems manager":"ssm", "amazon rds":"rds", "amazon s3":"s3", "amazon sqs":"sqs", "amazon ecs":"ecs", "amazon ecr":"ecr", "aws waf":"waf", "amazon cloudfront":"cloudfront", "amazon cognito":"cognito", "amazon ec2":"ec2", "elastic compute cloud":"ec2", "route 53":"route53", "람다":"lambda", "다이나모디비":"dynamodb"}.items(): value = value.lower().replace(source, target)
+        for source, target in {"aws systems manager":"ssm", "systems manager":"ssm", "amazon systems manager":"ssm", "amazon rds":"rds", "amazon s3":"s3", "amazon sqs":"sqs", "amazon ecs":"ecs", "amazon ecr":"ecr", "aws waf":"waf", "amazon cloudfront":"cloudfront", "amazon cognito":"cognito", "amazon ec2":"ec2", "elastic compute cloud":"ec2", "load balancer":"alb", "load-balancer":"alb", "elb":"alb", "elastic load balancing":"alb", "route 53":"route53", "람다":"lambda", "다이나모디비":"dynamodb"}.items(): value = value.lower().replace(source, target)
         return value
     expected = canonical(expected)
     titles = {canonical(title) for title in titles}
@@ -41,7 +41,7 @@ def check_consistency(draft: TaskDraft) -> list[str]:
         elif not _module_matches(check.module, module_titles):
             errors.append(f"[{check.id}] 존재하지 않는 module입니다: {check.module}")
         for key, value in check.expected.items():
-            if str(key).lower() in {"status", "dbinstancestatus", "state", "health", "availability"}: continue
+            if str(key).lower() in {"status", "dbinstancestatus", "state", "health", "health_status", "availability"}: continue
             if isinstance(value, (str, int, float)) and not isinstance(value, bool) and str(value).strip() and str(value).lower() not in doc_text.lower():
                 errors.append(f"[{check.id}] expected 값이 과제 본문에 없습니다: {key}={value}")
         if check.id not in draft.rubric_markdown:

@@ -248,7 +248,7 @@ class TaskDraft(BaseModel):
                         "aws backup": "backup", "amazon cognito": "cognito", "user pool": "cognito",
                         "eventbridge pipes": "eventbridge pipes", "amazon eventbridge": "eventbridge",
                         "step functions": "step functions", "aws kms": "kms", "secrets manager": "secrets manager",
-                        "application load balancer": "alb", "amazon alb": "alb", "route 53": "route53", "route53": "route53",
+                        "application load balancer": "alb", "amazon alb": "alb", "load balancer": "alb", "load-balancer": "alb", "elb": "alb", "elastic load balancing": "alb", "route 53": "route53", "route53": "route53",
                         "vpc lattice": "vpc lattice", "amazon opensearch": "opensearch", "amazon ec2": "ec2", "elastic compute cloud": "ec2",
                         "람다": "lambda", "다이나모디비": "dynamodb", "다이너모디비": "dynamodb",
                         "에스큐에스": "sqs", "에이피아이 게이트웨이": "api gateway", "클라우드프론트": "cloudfront",
@@ -342,7 +342,7 @@ class TaskDraft(BaseModel):
                     specs = target.setdefault("fixedSpecs", [])
                     existing = json.dumps(specs, ensure_ascii=False).lower()
                     for key, value in (check.get("expected", {}) or {}).items():
-                        if str(key).lower() in {"status", "dbinstancestatus", "state", "health", "availability"}: continue
+                        if str(key).lower() in {"status", "dbinstancestatus", "state", "health", "health_status", "availability"}: continue
                         if isinstance(value, (str, int, float, bool)) and str(value).lower() not in existing:
                             specs.append({"label": str(key).replace("_", " ").title(), "value": str(value)})
                             existing = json.dumps(specs, ensure_ascii=False).lower()

@@ -14,6 +14,7 @@ def _json_object(text: str) -> dict:
     start = text.find("{")
     if start < 0: raise ValueError("OpenCode 응답에서 JSON 객체를 찾지 못했습니다")
     payload = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text[start:])
+    payload = re.sub(r",\\s*([}\\]])", r"\\1", payload)
     decoder = json.JSONDecoder()
     for _ in range(100):
         try:

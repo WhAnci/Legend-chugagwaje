@@ -2,7 +2,7 @@ import json, re
 from .models import TaskDraft
 
 VPC_WEB_PROFILE = {
-    "keywords": ("vpc", "ec2", "alb"),
+    "keywords": ("vpc", "ec2", "alb", "elb"),
     "modules": [
         ("VPC", "VPC", "VPC 및 네트워크", "두 가용 영역에 웹 서버와 ALB를 배치할 네트워크를 구성합니다.", [("VPC Name", "web-vpc"), ("Public Subnet Names", ["web-public-a", "web-public-c"]), ("Internet Gateway Name", "web-igw"), ("Route Table Name", "web-public-rt")]),
         ("EC2", "Instance", "EC2 웹 서버", "서로 다른 가용 영역의 두 웹 서버가 HTTP와 /health 응답을 제공하도록 구성합니다.", [("Instance Names", ["web-server-01", "web-server-02"]), ("User Data File", "userdata.sh"), ("Application Port", "80"), ("Health Check Path", "/health"), ("Required Tag", "Project=WebService")]),
@@ -24,7 +24,7 @@ systemctl enable --now nginx
 def _has(text, word): return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text.lower()) is not None
 
 def complete_assignment(raw: str, draft: TaskDraft) -> TaskDraft:
-    if not all(_has(raw, word) for word in VPC_WEB_PROFILE["keywords"]): return draft
+    if not (_has(raw, "vpc") and _has(raw, "ec2") and (_has(raw, "alb") or _has(raw, "elb"))): return draft
     data = draft.model_dump(mode="json")
     document = data.get("document") or {}
     modules = document.setdefault("modules", [])

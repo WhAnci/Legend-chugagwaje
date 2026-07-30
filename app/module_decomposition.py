@@ -15,7 +15,7 @@ CATALOG = [
     ("SQS", "Queue", "SQS 메시지 큐", ("sqs", "message queue", "메시지 큐"), ("queue", "visibility", "retention", "dead letter", "fifo")),
     ("ECR", "Repository", "ECR 이미지 리포지토리", ("ecr", "container image repository", "이미지 저장소"), ("repository", "image", "scan", "tag")),
     ("ECS", "Fargate Service", "ECS Fargate 서비스", ("ecs", "fargate", "컨테이너 서비스"), ("service", "task definition", "desired", "cluster")),
-    ("ALB", "Load Balancer", "Application Load Balancer", ("alb", "application load balancer", "로드 밸런서"), ("listener", "target group", "health check")),
+    ("ALB", "Load Balancer", "Application Load Balancer", ("alb", "elb", "application load balancer", "elastic load balancing", "로드 밸런서"), ("listener", "target group", "health check")),
     ("Cognito", "UserPool", "Cognito User Pool", ("cognito", "user pool", "사용자 계정 풀"), ("user pool", "client", "domain", "issuer")),
     ("S3", "Bucket", "S3 버킷", ("s3", "object storage", "객체 저장 버킷"), ("bucket", "object", "versioning", "lifecycle")),
     ("EC2", "Instance", "EC2 인스턴스", ("ec2", "elastic compute cloud", "가상 서버"), ("instance", "ami", "instance type", "user data", "subnet")),

@@ -35,8 +35,9 @@ def _object(text: str) -> dict:
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.I)
     start = text.find("{")
     if start < 0: raise ValueError("JSON 객체 시작을 찾을 수 없음")
-    # 모델이 JSON 문자열 안의 정규식/Windows 경로 백슬래시를 이스케이프하지 않는 경우 보정한다.
+    # 모델이 JSON 문자열 안의 백슬래시와 trailing comma를 보정한다.
     payload = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text[start:])
+    payload = re.sub(r",\\s*([}\\]])", r"\\1", payload)
     decoder = json.JSONDecoder()
     for _ in range(100):
         try:
@@ -52,6 +53,7 @@ def _array(text: str) -> list:
     start = text.find("[")
     if start < 0: raise ValueError("JSON 배열 시작을 찾을 수 없음")
     payload = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text[start:])
+    payload = re.sub(r",\\s*([}\\]])", r"\\1", payload)
     decoder = json.JSONDecoder()
     for _ in range(100):
         try:
