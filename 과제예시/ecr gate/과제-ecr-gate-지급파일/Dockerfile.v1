@@ -1,0 +1,13 @@
+# shopd v1 — 레거시 런타임 위에 올린 기존 빌드
+FROM public.ecr.aws/docker/library/python:3.9-slim-buster
+
+RUN pip install --no-cache-dir \
+      "pyyaml==5.3.1" \
+      "requests==2.20.0" \
+      "urllib3==1.24.1" \
+      "jinja2==2.10"
+
+COPY shopd /usr/local/bin/shopd
+ENV BUILD=v1 PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/shopd"]

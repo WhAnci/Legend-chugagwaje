@@ -1,0 +1,6 @@
+discord.py>=2.4,<3
+httpx>=0.27,<1
+pydantic>=2.7,<3
+weasyprint>=62,<70
+markdown>=3.6,<4
+python-dotenv>=1.0,<2

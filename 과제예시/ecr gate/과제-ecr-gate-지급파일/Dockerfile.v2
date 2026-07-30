@@ -1,0 +1,7 @@
+# shopd v2 — 런타임을 최신 베이스로 옮긴 빌드
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
+
+COPY shopd /usr/local/bin/shopd
+ENV BUILD=v2 PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/shopd"]

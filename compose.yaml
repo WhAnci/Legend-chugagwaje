@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - artifacts:/data/jobs
+      - ./과제예시:/workspace/과제예시:ro
+      - ./과제제작가이드.txt:/workspace/과제제작가이드.txt:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: python -m app
+
+volumes:
+  artifacts:
