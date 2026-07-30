@@ -20,6 +20,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logger = logging.getLogger("aws-task-bot")
 intents = discord.Intents.default(); intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+AUTHORIZED_ROLE_ID = 1489479341892046948
 
 @dataclass
 class JobContext:
@@ -30,8 +31,24 @@ class JobContext:
     source: discord.Message | None = None
     notified: bool = False
     notifying: bool = False
+    task: asyncio.Task | None = None
+    worker_task: asyncio.Task | None = None
+    phase: str = "대기"
+    started_at: float = 0.0
 
 active_jobs: dict[str, JobContext] = {}
+job_history: list[dict] = []
+
+def has_authorized_role(member: discord.Member | discord.User) -> bool:
+    return any(getattr(role, "id", None) == AUTHORIZED_ROLE_ID for role in getattr(member, "roles", []))
+
+def authorized_or_message(member) -> bool:
+    return has_authorized_role(member)
+
+def remember_job(ctx: JobContext, state: str, detail: str = ""):
+    ctx.phase = state
+    job_history.append({"job_id": ctx.job_id, "user_id": ctx.user_id, "state": state, "detail": detail, "time": time.time()})
+    del job_history[:-50]
 
 async def timed_phase(status: discord.Message, label: str, seconds: int):
     started = time.monotonic()
@@ -55,7 +72,12 @@ async def create_job(raw: str):
     logger.info("generation backend=%s service=%s region=%s", os.getenv("AGENT_BACKEND", "opencode"), service, region or "unset")
     last_errors = []
     for _ in range(int(os.getenv("MAX_RETRIES", "2")) + 1):
-        current = request if not last_errors else request.model_copy(update={"raw": raw + "\n\n이전 검증 오류를 수정하라:\n" + "\n".join(last_errors)})
+        retry_raw = raw
+        if last_errors:
+            retry_payload = {"retryReason": "consistency_validation_failed", "errors": [{"message": error} for error in last_errors]}
+            retry_raw = raw + "\n\n재시도 지시(JSON):\n" + json.dumps(retry_payload, ensure_ascii=False)
+        # 이전 draft/JSON은 절대 전달하거나 병합하지 않고, 매 attempt마다 새 요청을 만든다.
+        current = request.model_copy(update={"raw": retry_raw, "previous_draft": ""})
         logger.info("generation attempt=%d started", _ + 1)
         draft = normalize(await generate(current))
         logger.info("generation attempt=%d returned title=%s", _ + 1, draft.title)
@@ -93,11 +115,16 @@ async def notify_original(ctx: JobContext, content: str, pdf_path: Path | None =
 
 async def run_generation(status: discord.Message, raw: str, context: JobContext | None = None):
     started = time.monotonic()
+    if context:
+        context.task = asyncio.current_task()
+        context.started_at = started
+        remember_job(context, "실행 중")
     try:
         logger.info("job started")
         await status.edit(content="🧠 1/3 과제 구조·요구사항·채점 흐름을 검토하고 있습니다.\n예상 시간은 외부 AI 응답에 따라 변동됩니다.")
+        if context: context.phase = "AI 생성 중"
         task = asyncio.create_task(create_job(raw))
-        started = time.monotonic()
+        if context: context.worker_task = task
         while not task.done():
             done, _ = await asyncio.wait({task}, timeout=10)
             if done: break
@@ -105,9 +132,11 @@ async def run_generation(status: discord.Message, raw: str, context: JobContext 
             await status.edit(content=f"🧠 1/3 요구사항·예시·채점 흐름을 검토 중입니다.\n경과: {elapsed}초 · 예상 남은 시간: 외부 AI 응답에 따라 변동")
         draft, result = await task
         logger.info("AI generation finished elapsed=%ss", int(time.monotonic() - started))
+        if context: context.phase = "산출물 생성 중"
         await status.edit(content="🛠️ 2/3 과제지·채점기준표·grading.sh·배포파일을 제작하고 있습니다.")
         result = validate(draft)
         if not result.ok: raise GeminiError("최종 검증 실패: " + "; ".join(result.errors))
+        if context: context.phase = "최종 검증 중"
         await status.edit(content="🔍 3/3 과제지·루브릭·스크립트 정합성과 실행 조건을 검증하고 있습니다.")
         review_issues = await review_draft(raw, draft)
         if review_issues:
@@ -117,15 +146,83 @@ async def run_generation(status: discord.Message, raw: str, context: JobContext 
         logger.info("artifacts built bundle=%s elapsed=%ss", bundle.name, int(time.monotonic() - started))
         await status.edit(content=f"✅ 제작 완료: **{draft.title}**\n검증 통과\n첨부된 ZIP에 과제지, 채점기준표, grading.sh, 배포파일이 포함되어 있습니다.", attachments=[discord.File(str(bundle), filename=bundle.name)])
         if context:
+            remember_job(context, "완료", draft.title)
             await notify_original(context, f"과제 생성이 완료되었습니다.\n과제명: **{draft.title}**")
+    except asyncio.CancelledError:
+        if context: remember_job(context, "취소됨")
+        try: await status.edit(content="⏹️ 과제 생성이 중지되었습니다.")
+        except Exception: pass
+        if context: await notify_original(context, "과제 생성이 중지되었습니다.")
     except Exception as exc:
+        if context: remember_job(context, "실패", str(exc)[:300])
         logger.exception("job failed elapsed=%ss", int(time.monotonic() - started))
         try: await status.edit(content=f"❌ 과제 제작 실패\n`{str(exc)[:1500]}`")
         except Exception: logger.exception("progress message update failed")
-        if context:
-            await notify_original(context, f"과제 생성에 실패했습니다.\n사유: `{str(exc)[:800]}`")
+        if context: await notify_original(context, f"과제 생성에 실패했습니다.\n사유: `{str(exc)[:800]}`")
     finally:
-        if context: active_jobs.pop(context.job_id, None)
+        if context:
+            active_jobs.pop(context.job_id, None)
+            context.worker_task = None
+
+async def cancel_job(ctx: JobContext):
+    if ctx.worker_task and not ctx.worker_task.done(): ctx.worker_task.cancel()
+    if ctx.task and ctx.task is not asyncio.current_task() and not ctx.task.done(): ctx.task.cancel()
+
+class StopJobView(discord.ui.View):
+    def __init__(self, jobs: list[JobContext], owner_id: int):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        for ctx in jobs[:5]:
+            button = discord.ui.Button(label=ctx.job_id[:8], style=discord.ButtonStyle.danger)
+            async def callback(interaction: discord.Interaction, job=ctx):
+                if interaction.user.id != self.owner_id or not has_authorized_role(interaction.user):
+                    await interaction.response.send_message("권한이 없습니다.", ephemeral=True); return
+                await cancel_job(job)
+                await interaction.response.edit_message(content=f"⏹️ 작업 `{job.job_id[:8]}` 중지 요청을 보냈습니다.", view=None)
+            button.callback = callback
+            self.add_item(button)
+
+@bot.tree.command(name="큐", description="현재 실행 중인 과제 작업을 확인합니다.")
+async def queue_command(interaction: discord.Interaction):
+    if not has_authorized_role(interaction.user):
+        await interaction.response.send_message("이 명령어는 지정된 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return
+    if not active_jobs:
+        await interaction.response.send_message("📭 실행 중인 과제가 없습니다.", ephemeral=True); return
+    lines = [f"`{ctx.job_id[:8]}` · <@{ctx.user_id}> · {ctx.phase}" for ctx in active_jobs.values()]
+    await interaction.response.send_message("📋 현재 작업 큐\n" + "\n".join(lines), ephemeral=True)
+
+@bot.tree.command(name="중지", description="실행 중인 과제 작업을 중지합니다.")
+async def stop_command(interaction: discord.Interaction):
+    if not has_authorized_role(interaction.user):
+        await interaction.response.send_message("이 명령어는 지정된 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return
+    jobs = list(active_jobs.values())
+    if not jobs:
+        await interaction.response.send_message("중지할 작업이 없습니다.", ephemeral=True); return
+    if len(jobs) == 1:
+        await cancel_job(jobs[0]); await interaction.response.send_message(f"⏹️ 작업 `{jobs[0].job_id[:8]}` 중지 요청을 보냈습니다.", ephemeral=True); return
+    await interaction.response.send_message("중지할 작업을 선택하세요.", view=StopJobView(jobs, interaction.user.id), ephemeral=True)
+
+@bot.tree.command(name="로그", description="최근 과제 생성 작업 로그를 확인합니다.")
+async def logs_command(interaction: discord.Interaction):
+    if not has_authorized_role(interaction.user):
+        await interaction.response.send_message("이 명령어는 지정된 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return
+    records = job_history[-15:]
+    if not records:
+        await interaction.response.send_message("📭 작업 로그가 없습니다.", ephemeral=True); return
+    text = "\n".join(f"`{x['job_id'][:8]}` {x['state']} <@{x['user_id']}> {x['detail']}" for x in records)
+    await interaction.response.send_message("🧾 최근 작업 로그\n" + text[:1900], ephemeral=True)
+
+@bot.tree.command(name="도움말", description="봇 명령어 도움말을 표시합니다.")
+async def help_command(interaction: discord.Interaction):
+    if not has_authorized_role(interaction.user):
+        await interaction.response.send_message("이 명령어는 지정된 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return
+    embed = discord.Embed(title="🤖 추가과제 봇 도움말", description="지정된 역할 보유자만 사용할 수 있습니다.")
+    embed.add_field(name="/추가과제", value="새 AWS 과제를 생성합니다.", inline=False)
+    embed.add_field(name="/큐", value="실행 중인 작업을 확인합니다.", inline=False)
+    embed.add_field(name="/중지", value="작업 하나 또는 선택한 작업을 중지합니다.", inline=False)
+    embed.add_field(name="/로그", value="최근 작업 상태를 확인합니다.", inline=False)
+    embed.add_field(name="/usage", value="API 사용량 링크를 확인합니다.", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 def topics_embed(topics: list[dict]) -> discord.Embed:
     embed = discord.Embed(title="📚 AI가 새로운 추가과제 주제를 준비했습니다.", description="아래 후보 중 하나를 선택하세요.", color=discord.Color.blue())
@@ -145,6 +242,8 @@ def topic_prompt(topic: dict) -> str:
     return json.dumps(topic, ensure_ascii=False)
 
 async def choose_again(interaction: discord.Interaction, topic: dict | None, previous: list[dict] | None = None):
+    if not has_authorized_role(interaction.user):
+        await interaction.followup.send("권한이 없습니다.", ephemeral=True); return
     if topic is None:
         try:
             topics = await suggest_topics("이전 후보와 다른 AWS 추가과제 주제 3개를 제안해줘", (previous or []) + load_topic_history()[-40:])
@@ -162,15 +261,20 @@ async def choose_again(interaction: discord.Interaction, topic: dict | None, pre
 
 @bot.tree.command(name="usage", description="AI API 사용량을 확인합니다.")
 async def usage_command(interaction: discord.Interaction):
+    if not has_authorized_role(interaction.user):
+        await interaction.response.send_message("권한이 없습니다.", ephemeral=True); return
     await interaction.response.send_message(usage_links() + "\n\n" + usage_summary(), ephemeral=True)
 
 @bot.command(name="usage")
 async def usage_prefix_command(ctx: commands.Context):
+    if not has_authorized_role(ctx.author): return
     await ctx.reply(usage_links() + "\n\n" + usage_summary(), mention_author=False)
 
 @bot.tree.command(name="추가과제", description="AWS 추가과제를 생성하거나 주제 목록을 확인합니다.")
 @app_commands.describe(requirements="원하는 AWS 서비스나 과제 요구사항(비워두면 AI가 주제를 추천합니다)")
 async def add_task_command(interaction: discord.Interaction, requirements: str | None = None):
+    if not has_authorized_role(interaction.user):
+        await interaction.response.send_message("이 명령어는 지정된 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return
     await interaction.response.defer()
     raw = (requirements or "").strip()
     if not raw:
@@ -203,7 +307,12 @@ async def on_ready():
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot: return
+    if bot.user in message.mentions and not has_authorized_role(message.author):
+        await message.reply("이 봇은 지정된 역할 보유자만 사용할 수 있습니다.", mention_author=False)
+        return
     if message.content.strip().lower() in {"./usage", "!usage"}:
+        if not has_authorized_role(message.author):
+            await message.reply("권한이 없습니다.", mention_author=False); return
         await message.reply(usage_links() + "\n\n" + usage_summary(), mention_author=False)
         return
     if bot.user not in message.mentions:

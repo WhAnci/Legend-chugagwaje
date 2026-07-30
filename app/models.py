@@ -25,7 +25,8 @@ class DeploymentFile(BaseModel):
 
 class GradingCheck(StructuredModel):
     id: str
-    module: str
+    module: str = ""
+    module_id: str = ""
     label: str
     requirement: str = ""
     expected: dict = Field(default_factory=dict)
@@ -47,6 +48,7 @@ class TaskSection(StructuredModel):
     verification: list[str] = Field(default_factory=list)
 
 class TaskModule(StructuredModel):
+    id: str = ""
     number: int = 1
     title: str
     service: str = ""
@@ -187,16 +189,45 @@ class TaskDraft(BaseModel):
                         })
                     if len(promoted) >= 2: doc["modules"] = promoted
             doc = decompose_document(doc)
+            used_ids = set()
+            for index, module in enumerate(doc.get("modules", []), 1):
+                if not isinstance(module, dict): continue
+                base = re.sub(r"[^a-z0-9]+", "-", str(module.get("service", "") or module.get("title", "")).lower()).strip("-") or f"module-{index}"
+                module_id = base
+                suffix = 2
+                while module_id in used_ids:
+                    module_id = f"{base}-{suffix}"; suffix += 1
+                module["id"] = module_id
+                module["number"] = index
+                used_ids.add(module_id)
+            seen_descriptions = set()
+            for module in doc.get("modules", []):
+                if not isinstance(module, dict): continue
+                description = str(module.get("description", "")).strip()
+                if description and description in seen_descriptions:
+                    module["description"] = f"{module.get('title', '이 module')}의 역할과 최종 상태를 구성합니다."
+                if description: seen_descriptions.add(description)
             data["document"] = doc
         checks = data.get("checks")
         if isinstance(checks, dict): checks = [checks]
         if isinstance(checks, list) and isinstance(data.get("document"), dict):
             module_items = [module for module in data["document"].get("modules", []) if isinstance(module, dict)]
             titles = [str(module.get("title", "")) for module in module_items]
+            modules_by_id = {str(module.get("id", "")): module for module in module_items}
             for check in checks:
                 if not isinstance(check, dict): continue
+                module_id = str(check.get("moduleId", check.get("module_id", "")))
+                if module_id in modules_by_id:
+                    check["module"] = modules_by_id[module_id].get("title", "")
+                    continue
                 module_name = str(check.get("module", ""))
-                if module_name in titles or not titles: continue
+                if module_name.isdigit():
+                    expected = check.get("expected", {}) or {}
+                    module_name = " ".join([str(x) for x in expected.keys()] + [str(x) for x in expected.values()])
+                if module_name in titles or not titles:
+                    target = next((module for module in module_items if module.get("title") == module_name), None)
+                    if target: check["moduleId"] = target.get("id", "")
+                    continue
                 def canonical_service(value):
                     value = value.lower()
                     aliases = {
@@ -230,10 +261,13 @@ class TaskDraft(BaseModel):
                     title_tokens = set(re.findall(r"[a-z0-9가-힣]+", title_normalized)) - {"구성", "설정", "구현", "처리", "서비스", "함수"}
                     compact_a = re.sub(r"[^a-z0-9가-힣]", "", expected_normalized)
                     compact_b = re.sub(r"[^a-z0-9가-힣]", "", title_normalized)
-                    return (2 if compact_a in compact_b or compact_b in compact_a else 0) + len(expected_tokens & title_tokens)
+                    compact_match = bool(compact_a) and (compact_a in compact_b or compact_b in compact_a)
+                    return (2 if compact_match else 0) + len(expected_tokens & title_tokens)
                 ranked = sorted(titles, key=similarity, reverse=True)
                 if ranked and similarity(ranked[0]) > 0:
                     check["module"] = ranked[0]
+                    target = module_by_title.get(ranked[0], {})
+                    check["moduleId"] = target.get("id", "")
             # 모델이 checks를 5개 미만으로 반환해도 module의 최종 specs에서
             # 누락된 자동검사 항목을 보완한다.
             if len(checks) < 5:
@@ -249,7 +283,7 @@ class TaskDraft(BaseModel):
                     index += 1
                     check_id = f"AUTO-{len(checks) + 1:02d}"
                     script_check = f"check_auto_{len(checks) + 1:02d}"
-                    checks.append({"id": check_id, "module": module.get("title", ""), "label": spec.get("label", "자동 검사"), "requirement": "최종 설정값을 확인합니다.", "expected": {str(spec.get("label", "value")): spec.get("value", "")}, "score": 1.0, "required": True, "scriptCheck": script_check})
+                    checks.append({"id": check_id, "moduleId": module.get("id", ""), "module": module.get("title", ""), "label": spec.get("label", "자동 검사"), "requirement": "최종 설정값을 확인합니다.", "expected": {str(spec.get("label", "value")): spec.get("value", "")}, "score": 1.0, "required": True, "scriptCheck": script_check})
                     data["rubric_markdown"] = str(data.get("rubric_markdown", "")) + f"\n[{check_id}] {spec.get('label', '자동 검사')} 1.0점"
                     data["grading_script"] = str(data.get("grading_script", "")) + f"\n# [{check_id}]\n{script_check}() {{ :; }}\n"
             scores = [float(check.get("score", 0) or 0) for check in checks if isinstance(check, dict)]
@@ -280,7 +314,7 @@ class TaskDraft(BaseModel):
                 number = len(checks) + 1
                 check_id = f"AUTO-{number:02d}"
                 script_check = f"check_auto_{number:02d}"
-                checks.append({"id": check_id, "module": title, "label": spec.get("label", "module 존재"), "requirement": "module의 최종 구성을 확인합니다.", "expected": ({str(spec.get("label")): spec.get("value")} if spec else {}), "score": 0.5, "required": True, "scriptCheck": script_check})
+                checks.append({"id": check_id, "moduleId": module.get("id", ""), "module": title, "label": spec.get("label", "module 존재"), "requirement": "module의 최종 구성을 확인합니다.", "expected": ({str(spec.get("label")): spec.get("value")} if spec else {}), "score": 0.5, "required": True, "scriptCheck": script_check})
                 data["rubric_markdown"] = str(data.get("rubric_markdown", "")) + f"\n[{check_id}] {title} 0.5점"
                 data["grading_script"] = str(data.get("grading_script", "")) + f"\n# [{check_id}]\n{script_check}() {{ :; }}\n"
                 existing_modules.add(title)

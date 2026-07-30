@@ -33,8 +33,12 @@ def check_consistency(draft: TaskDraft) -> list[str]:
     if round(total, 2) != 6.0: errors.append(f"checks 총점이 6.0이 아닙니다: {total:g}")
     doc_text = draft.document.model_dump_json() if draft.document else ""
     module_titles = {m.title for m in draft.document.modules} if draft.document else set()
+    module_ids = {m.id for m in draft.document.modules} if draft.document else set()
     for check in checks:
-        if not _module_matches(check.module, module_titles):
+        if check.module_id:
+            if check.module_id not in module_ids:
+                errors.append(f"[{check.id}] 존재하지 않는 moduleId입니다: {check.module_id}")
+        elif not _module_matches(check.module, module_titles):
             errors.append(f"[{check.id}] 존재하지 않는 module입니다: {check.module}")
         for key, value in check.expected.items():
             if str(key).lower() in {"status", "dbinstancestatus", "state", "health", "availability"}: continue
@@ -61,6 +65,6 @@ def check_consistency(draft: TaskDraft) -> list[str]:
     if unknown_script: errors.append(f"채점 스크립트에 checks 외 ID가 있습니다: {sorted(unknown_script)}")
     if draft.document:
         for module in draft.document.modules:
-            module_checks = [c for c in checks if c.module == module.title]
+            module_checks = [c for c in checks if c.module_id == module.id or (not c.module_id and c.module == module.title)]
             if not module_checks: errors.append(f"module에 연결된 check가 없습니다: {module.title}")
     return errors

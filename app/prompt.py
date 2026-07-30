@@ -17,7 +17,7 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 필드: title, summary, document, checks, rubric_markdown, grading_script, deployment_files, notes.
 `document`는 아래 구조화 스키마를 따르며, 과제지 전체 Markdown/HTML을 생성하지 않는다. 각 deployment_files 원소는 path(string)와 content(string)를 가진다. `grading_script`는 반드시 실행 가능한 Shell 문자열 하나이며 path/content 객체로 감싸지 않는다.
 
-`checks`는 과제 본문·채점기준표·채점 스크립트의 단일 원본이다. 각 항목은 id(예: CF-01), module, label, requirement, expected 객체, score, required(boolean), scriptCheck를 가진다. 모든 필수 최종 설정값과 실제 채점 조건을 checks에 먼저 기록한다. rubric_markdown에는 각 check의 id/label/expected/score/required를 그대로 반영하고, grading_script에는 각 check의 id와 scriptCheck 함수가 모두 구현되어야 한다.
+`checks`는 과제 본문·채점기준표·채점 스크립트의 단일 원본이다. 각 항목은 id(예: CF-01), moduleId, label, requirement, expected 객체, score, required(boolean), scriptCheck를 가진다. moduleId는 배열 인덱스나 PDF 번호가 아니라 각 module의 안정적인 문자열 ID를 사용한다. 모든 필수 최종 설정값과 실제 채점 조건을 checks에 먼저 기록한다. rubric_markdown에는 각 check의 id/label/expected/score/required를 그대로 반영하고, grading_script에는 각 check의 id와 scriptCheck 함수가 모두 구현되어야 한다.
 `document` 구조(JSON 타입을 엄격히 지킨다):
 - meta: document_title(string), year(number 또는 입력 원문), occupation(string), title(string), assignment_number(string), duration(string), region(string), candidate_number(string), judge_confirmation(string), mock(boolean).
 - overview: 과제 개요 2~3문장(string)

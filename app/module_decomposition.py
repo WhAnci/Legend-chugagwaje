@@ -85,7 +85,25 @@ def decompose_document(doc: dict) -> dict:
             if original.get("dependencies"): module["dependencies"] = original["dependencies"]
             if original.get("providedFiles"): module["providedFiles"] = original["providedFiles"]
             output.append(module)
-    for number, module in enumerate(output, 1):
+    # retry/LLM 응답에서 동일 리소스 module이 반복되면 하나로 정규화한다.
+    merged = []
+    positions = {}
+    for module in output:
+        service = str(module.get("service", "")).lower()
+        resource_type = str(module.get("resourceType", module.get("resource_type", ""))).lower()
+        title = re.sub(r"[^a-z0-9가-힣]", "", str(module.get("title", "")).lower())
+        names = [str(spec.get("value", "")).lower() for spec in module.get("specs", []) if isinstance(spec, dict) and "name" in str(spec.get("label", "")).lower()]
+        key = (service, resource_type, names[0] if names else title)
+        if key not in positions:
+            positions[key] = len(merged); merged.append(module); continue
+        target = merged[positions[key]]
+        existing = {(str(s.get("label")), json.dumps(s.get("value"), ensure_ascii=False)) for s in target.get("specs", []) if isinstance(s, dict)}
+        for spec in module.get("specs", []):
+            if not isinstance(spec, dict): continue
+            pair = (str(spec.get("label")), json.dumps(spec.get("value"), ensure_ascii=False))
+            if pair not in existing: target.setdefault("specs", []).append(spec); existing.add(pair)
+        if module.get("description") and not target.get("description"): target["description"] = module["description"]
+    for number, module in enumerate(merged, 1):
         module["number"] = number
-    if output: doc["modules"] = output
+    if merged: doc["modules"] = merged
     return doc
