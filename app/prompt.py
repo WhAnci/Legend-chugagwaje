@@ -89,7 +89,7 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - 예제처럼 먼저 모듈 요약표를 제시한 뒤 세부 채점 방법과 기대 출력 예시를 제시한다.
 
 [채점 Shell script 품질]
-- CloudShell에서 실행한다. CloudShell은 채점 전용이며 과제 구현 Client로 사용하지 않는다. 외부 Client, 부하 발생기, 요청 생성기 또는 테스트 실행 주체가 필요하면 EC2 Client 인스턴스를 별도 생성하거나 지급파일로 제공한다.
+- CloudShell에서 실행한다. CloudShell은 채점 전용이며 과제 구현 Client로 사용하지 않는다. 과제 본문·overview·architecture·requirements·precautions·module description에는 CloudShell을 Client/구현 환경으로 절대 언급하지 않는다. 외부 Client, 부하 발생기, 요청 생성기 또는 테스트 실행 주체가 필요하면 EC2 Client 인스턴스를 별도 생성하거나 지급파일로 제공한다.
 - 현재 CloudShell의 IAM User/Role 권한을 사용한다. Access Key 입력, aws configure, 자격증명 저장·변경을 요구하지 않는다.
 - `#!/usr/bin/env bash`, `set -Eeuo pipefail`을 사용한다.
 - `--help`, `--dry-run`, `--region REGION`, `--output FILE`과 필요한 후보 식별자 옵션을 지원한다. 기본 리전은 문서와 일치해야 한다.

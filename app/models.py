@@ -210,7 +210,7 @@ class TaskDraft(BaseModel):
                 if description: seen_descriptions.add(description)
             def sanitize_assignment_text(value):
                 if isinstance(value, str):
-                    return re.sub(r"cloud\\s*shell", "채점 실행 환경", value, flags=re.I)
+                    return re.sub(r"cloud\s*shell", "채점 실행 환경", value, flags=re.I)
                 if isinstance(value, list): return [sanitize_assignment_text(item) for item in value]
                 if isinstance(value, dict): return {key: sanitize_assignment_text(item) for key, item in value.items()}
                 return value
@@ -372,6 +372,8 @@ class TaskDraft(BaseModel):
             data["rubric_markdown"] = rubric_text
             data["grading_script"] = script_text
             data["checks"] = checks
+        if isinstance(data.get("assignment_markdown"), str):
+            data["assignment_markdown"] = re.sub(r"cloud\s*shell", "채점 실행 환경", data["assignment_markdown"], flags=re.I)
         return data
 
 class ValidationResult(BaseModel):
