@@ -18,6 +18,7 @@ venv/
 usage.json
 topic-history.json
 *.pdf
+!과제예시/**/*.pdf
 *.zip
 *.log
 
