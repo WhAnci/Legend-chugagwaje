@@ -60,8 +60,11 @@ def decompose_document(doc: dict) -> dict:
     for original in modules:
         if not isinstance(original, dict): continue
         entries = detect(_text(original))
-        # A service-specific module remains intact; only genuinely mixed modules split.
-        if len(entries) < 2:
+        declared_entries = detect(_text({key: original.get(key, "") for key in ("service", "resourceType", "title")}))
+        # 명시된 service module의 specs에 연결 대상 서비스명이 들어간 것은
+        # 혼합 module이 아니라 dependency/settings일 수 있으므로 유지한다.
+        # title/service 자체가 여러 핵심 서비스를 표현할 때만 분리한다.
+        if len(entries) < 2 or (original.get("service") and len(declared_entries) < 2):
             output.append(original)
             continue
         groups = {entry[0]: [] for entry in entries}

@@ -29,6 +29,7 @@ class GradingCheck(StructuredModel):
     module_id: str = ""
     label: str
     requirement: str = ""
+    behavior_expectation: str = ""
     expected: dict = Field(default_factory=dict)
     score: float
     required: bool = True

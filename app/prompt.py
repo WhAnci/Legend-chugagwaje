@@ -17,7 +17,7 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 필드: title, summary, document, checks, rubric_markdown, grading_script, deployment_files, notes.
 `document`는 아래 구조화 스키마를 따르며, 과제지 전체 Markdown/HTML을 생성하지 않는다. 각 deployment_files 원소는 path(string)와 content(string)를 가진다. `grading_script`는 반드시 실행 가능한 Shell 문자열 하나이며 path/content 객체로 감싸지 않는다.
 
-`checks`는 과제 본문·채점기준표·채점 스크립트의 단일 원본이다. 각 항목은 id(예: CF-01), moduleId, label, requirement, expected 객체, score, required(boolean), scriptCheck를 가진다. moduleId는 반드시 document.modules[].id와 정확히 같은 안정적인 문자열을 복사한다. `module`, 숫자 `0`, 배열 인덱스, PDF의 No 번호를 moduleId에 넣지 않는다. 모든 필수 최종 설정값과 실제 채점 조건을 checks에 먼저 기록한다. rubric_markdown에는 각 check의 id/label/expected/score/required를 그대로 반영하고, grading_script에는 각 check의 id와 scriptCheck 함수가 모두 구현되어야 한다.
+`checks`는 과제 본문·채점기준표·채점 스크립트의 단일 원본이다. 각 항목은 id(예: CF-01), moduleId, label, requirement, behaviorExpectation, expected 객체, score, required(boolean), scriptCheck를 가진다. moduleId는 반드시 document.modules[].id와 정확히 같은 안정적인 문자열을 복사한다. `module`, 숫자 `0`, 배열 인덱스, PDF의 No 번호를 moduleId에 넣지 않는다. 모든 필수 최종 설정값과 실제 채점 조건을 checks에 먼저 기록한다. rubric_markdown에는 각 check의 id/label/expected/score/required를 그대로 반영하고, grading_script에는 각 check의 id와 scriptCheck 함수가 모두 구현되어야 한다.
 `document` 구조(JSON 타입을 엄격히 지킨다):
 - meta: document_title(string), year(number 또는 입력 원문), occupation(string), title(string), assignment_number(string), duration(string), region(string), candidate_number(string), judge_confirmation(string), mock(boolean).
 - overview: 과제 개요 2~3문장(string)
@@ -35,7 +35,7 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - inferredConstraints에는 선수가 목적과 기대 동작을 보고 판단해야 하는 조건을 기록하되, PDF에서는 description에 자연스럽게 녹여 쓰고 별도 목록으로 출력하지 않는다. 모든 설정값을 specs에 나열하지 않는다.
 - 정확한 숫자를 숨긴 경우 grading checks는 허용 범위 또는 동작 기반으로 작성한다. 과제지에 근거가 없는 숨은 단일 채점값을 만들지 않는다.
 - architecture에는 구현 절차가 아니라 Client, 핵심 서비스, 연결 관계, Origin/Target의 최종 흐름만 ASCII 다이어그램으로 표시한다.
-- 각 모듈은 목적 설명 1~3문단과 fixedSpecs만 PDF에 표시한다. R-01/R-02 식별자를 생성하지 않는다. 과제 본문에 명시하는 필수 설정값은 반드시 하나 이상의 checks.expected에도 존재해야 한다.
+- 각 모듈은 목적 설명 1~3문단과 fixedSpecs만 PDF에 표시한다. R-01/R-02 식별자를 생성하지 않는다. 과제 본문에 명시하는 필수 설정값은 반드시 하나 이상의 checks.expected에도 존재해야 한다. 존재 확인만 하지 말고 최소 하나의 실제 HTTP·이벤트·복구 동작 검증을 checks에 포함한다.
 - footer: 입력에 있을 때만 문자열
 번호는 정수 데이터로 넣고 제목에 번호를 직접 중복하지 않는다.
 `document`가 있으면 렌더러가 고정 공식 과제지 템플릿으로 PDF를 만든다.
@@ -46,6 +46,7 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - 의존관계가 있어도 합치지 않는다. 연결 대상은 specs 또는 dependencies에 기록한다.
 - 제목에 여러 핵심 서비스를 `및`, `/`, `·`로 묶지 않는다. 생성 전에 서비스·리소스·이름·코드·연결·권한·이벤트 관계를 추출하고 독립 채점 단위를 식별한다.
 - modules 수는 추출된 핵심 리소스 수보다 작아서는 안 된다. IAM 역할, 로그, 환경 변수, 태그처럼 독립 채점 대상이 아닌 보조 설정은 주 서비스 module에 포함한다.
+- 사용자가 VPC·EC2·ALB처럼 서비스 이름만 간단히 지정하면 이름 나열으로 끝내지 말고 VPC/두 AZ 서브넷/Internet Gateway/라우팅, EC2 웹 서버 2대, ALB/Listener/Target Group/Health Check, 접근 제어까지 연결된 최소 end-to-end 과제로 확장한다. 웹 동작이면 `userdata.sh` 또는 실행 가능한 배포 파일을 deployment_files와 provided_files에 포함하고 `/health` 및 두 인스턴스 식별 응답을 grading checks에 포함한다. 숫자 Count만으로 대상을 표현하지 않는다.
 - 사용자가 서비스를 지정하면 그 서비스를 주력 리소스로 고정해 하나의 현실적인 업무 시나리오를 만든다. 지정 서비스와 무관한 서비스를 섞지 않는다. 주력 리소스 하나의 설정·보안·관측·동작 검증을 깊이 있게 구성한다. 단순 생성·조회만 하는 초급 CRUD는 금지한다.
 - 채점 영역은 각 핵심 module의 구성·보안·동작·운영을 균형 있게 검사한다. 여러 module이 하나의 end-to-end 흐름을 이루어도 module을 합치지 않는다.
 - 단순히 VPC·서브넷·EC2를 만들고 웹 페이지 한 번을 확인하는 과제, 리소스 존재만 확인하는 과제, User Data 설치만 평가하는 과제는 절대 만들지 않는다.

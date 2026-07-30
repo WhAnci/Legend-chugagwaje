@@ -14,6 +14,7 @@ from .build import build
 from .ui import TopicChoiceView
 from .topic_history import load as load_topic_history, add as remember_topics
 from .usage import summary as usage_summary, links as usage_links
+from .completeness import complete_assignment
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -79,7 +80,7 @@ async def create_job(raw: str):
         # 이전 draft/JSON은 절대 전달하거나 병합하지 않고, 매 attempt마다 새 요청을 만든다.
         current = request.model_copy(update={"raw": retry_raw, "previous_draft": ""})
         logger.info("generation attempt=%d started", _ + 1)
-        draft = normalize(await generate(current))
+        draft = complete_assignment(raw, normalize(await generate(current)))
         logger.info("generation attempt=%d returned title=%s", _ + 1, draft.title)
         result = validate(draft)
         if result.ok:
