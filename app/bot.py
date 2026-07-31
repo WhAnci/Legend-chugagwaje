@@ -74,7 +74,7 @@ async def create_job(raw: str):
     # DeepSeek: 요구사항 분석과 산출물 제작을 함께 담당한다. Gemini는 최종 검토만 한다.
     logger.info("generation backend=%s service=%s region=%s", os.getenv("AGENT_BACKEND", "opencode"), service, region or "unset")
     last_errors = []
-    for _ in range(int(os.getenv("MAX_RETRIES", "2")) + 1):
+    for _ in range(int(os.getenv("MAX_RETRIES", "3")) + 1):
         retry_raw = raw
         if last_errors:
             retry_payload = {"retryReason": "consistency_validation_failed", "errors": [{"message": error} for error in last_errors]}

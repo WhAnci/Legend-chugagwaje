@@ -31,6 +31,7 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - Lambda 지급파일(`lambda_function.py`)은 반드시 Lambda module의 `providedFiles`와 `deployment_files[].usedByModule`에 연결한다. API Gateway-Lambda 통합에는 함수명·runtime·handler를 포함한다. Route 53 Hosted Zone/Record/Health Check/Failover는 ALB module에 넣지 않는다.
 - `StatusCode`, `BodyContains`, `Failover success`, 응답 코드와 같은 검증 결과·기대 동작은 fixedSpecs가 아니라 behavior check/gradingSpec으로 표현한다.
 - 다중 리전은 각 deployment에 role과 region을 명시하고, primary/secondary API와 Lambda 연동이 누락되지 않았는지 확인한다.
+- Reviewer 또는 정적 검증에서 `아키텍처의 실행 구성요소가 module에 없습니다` 오류가 전달되면 해당 서비스를 architecture에서 삭제하지 말고 새 candidate에 실제 module, 최소 설정값, 설명, grading check를 모두 생성한다. API Gateway가 architecture에 있으면 반드시 Amazon API Gateway module과 API Name/Protocol/Method/Integration/Stage를 포함한다.
 - title은 대표 AWS 서비스 또는 논리 계층명으로 작성한다. 역할 설명은 role/subtitle에 둔다. `primaryService`는 대표 서비스, `includedResources`는 묶인 하위 리소스 목록이다. 예: title=`Application Load Balancer`, primaryService=`Elastic Load Balancing`, includedResources=[`Application Load Balancer`, `HTTP Listener`, `Target Group`, `Health Check`].
 - assignment-level verification, cleanup만 최상위에서 관리한다. modules에는 sections를 사용하지 않는다.
 - module에는 tasks, notes, verification, instructions, stepByStep, implementationGuide 필드를 넣지 않는다.
