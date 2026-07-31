@@ -113,9 +113,16 @@ AI, IoT, 게임, IAM Identity Center는 제외한다. 보조 서비스는 최대
                 })
             if all(x["title"] and x["primaryService"] for x in values): return values
             raise ValueError("주제 후보 필수 필드가 비어 있습니다")
-    except Exception:
-        pass
-    raise GeminiError("AI 과제 후보 생성에 실패했습니다.")
+    except Exception as exc:
+        logger.warning("topic suggestion failed; using deterministic fallback: %s", str(exc)[:300])
+    # 주제 후보는 산출물 생성 전 선택 화면용이므로 Gemini 일시 장애나 JSON 형식 오류가
+    # 전체 UX를 막지 않도록 결정적 후보를 제공한다. 실제 과제 산출물은 승인 후
+    # Blueprint/검증 파이프라인을 다시 통과한다.
+    return [
+        {"title": "S3 이벤트 기반 민감 파일 격리 및 알림", "problemType": "보안 통제", "taskType": "이벤트 처리형", "primaryService": "Amazon S3", "supportingServices": ["AWS Lambda", "AWS KMS", "Amazon SNS"], "scenario": "S3 객체 이벤트를 Lambda로 처리하여 민감 파일을 KMS로 암호화된 격리 영역에 이동하고 알림을 발행합니다.", "coreWork": ["S3 이벤트 연결", "Lambda 최소 권한", "KMS 암호화", "SNS 알림"], "behaviorValidation": "민감 파일 격리와 원문 비노출을 검증합니다.", "difference": "이벤트·암호화·알림을 결합한 보안 흐름"},
+        {"title": "ECR 취약 이미지 자동 격리", "problemType": "취약점 대응", "taskType": "자동화형", "primaryService": "Amazon ECR", "supportingServices": ["Amazon EventBridge", "AWS Lambda"], "scenario": "ECR 이미지 스캔 결과를 이벤트로 받아 위험 이미지를 자동 태깅 또는 격리합니다.", "coreWork": ["Scan on Push", "EventBridge Rule", "Lambda 판정 및 격리"], "behaviorValidation": "위험 이미지와 정상 이미지의 처리 결과를 비교합니다.", "difference": "취약점 이벤트 기반 자동 대응"},
+        {"title": "CloudFront와 WAF 기반 엣지 보안 통제", "problemType": "트래픽 제어", "taskType": "보안 강화형", "primaryService": "Amazon CloudFront", "supportingServices": ["AWS WAF", "Amazon S3", "CloudFront Functions"], "scenario": "정적 콘텐츠 앞단에 WAF와 엣지 함수를 배치하여 공격 요청과 위험 지역 트래픽을 차단합니다.", "coreWork": ["S3 OAC", "WAF 규칙", "Geo 차단", "보안 헤더"], "behaviorValidation": "정상 요청 허용과 공격 요청 차단을 검증합니다.", "difference": "엣지 계층 중심의 보안 검증"}
+    ]
 
 async def review_draft(raw: str, draft) -> list[str]:
     """DeepSeek 산출물에 대한 단 한 번의 최종 내용 검토."""
