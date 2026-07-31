@@ -99,8 +99,24 @@ def review_generated_draft(blueprint: AssignmentBlueprint, draft: TaskDraft) -> 
         if any(alias in architecture for alias in aliases) and not any(alias in corpus for alias in aliases):
             errors.append(f"아키텍처 구성요소가 module에 없습니다: {component.service}")
     for file in blueprint.provided_files:
-        if file.path.lower() in {f.path.lower() for f in draft.deployment_files} and not any("lambda" in m.service.lower() or "function" in m.title.lower() for m in modules):
+        matching_files = [f for f in draft.deployment_files if f.path.lower() == file.path.lower()]
+        if matching_files and not any("lambda" in m.service.lower() or "function" in m.title.lower() for m in modules):
             errors.append(f"지급파일 배포 대상 module이 없습니다: {file.path}")
+        for deployment in matching_files:
+            code = deployment.content
+            env_names = set(re.findall(r"os\.environ(?:\.get)?(?:\(|\[)\s*[\"']([A-Z][A-Z0-9_]+)", code))
+            module_text = " ".join(m.model_dump_json() for m in modules).lower()
+            for env_name in env_names:
+                if env_name.lower() not in module_text:
+                    errors.append(f"지급파일 환경 변수가 module에 정의되지 않았습니다: {env_name}")
+            operations = {
+                "s3.get_object": ("Amazon S3", "GetObject"), "s3.copy_object": ("Amazon S3", "PutObject"),
+                "s3.delete_object": ("Amazon S3", "DeleteObject"), "sns.publish": ("Amazon SNS", "Publish"),
+                "kms.encrypt": ("AWS KMS", "Encrypt"), "kms.generate_data_key": ("AWS KMS", "GenerateDataKey")
+            }
+            for operation, (service, permission) in operations.items():
+                if operation in code.lower() and (service.lower() not in module_text or permission.lower() not in module_text):
+                    errors.append(f"지급파일 의존성이 명세에 없습니다: {operation} → {permission}")
     forbidden = re.compile(r"status ?code|body ?contain|exit ?code|failover success|subscription ?count", re.I)
     for module in modules:
         if any(forbidden.search(str(spec.label)) for spec in (module.fixed_specs or module.specs)):
@@ -108,5 +124,15 @@ def review_generated_draft(blueprint: AssignmentBlueprint, draft: TaskDraft) -> 
     if len(blueprint.components) >= 2 and not draft.checks: errors.append("Blueprint를 검증할 gradingSpec/checks가 없습니다.")
     return errors
 
+def architect_prompt(blueprint: AssignmentBlueprint) -> str:
+    return """[Architect 단계]
+과제 JSON을 아직 작성하지 말고 아래 Blueprint를 기준으로 목표, 데이터 흐름, 구성요소, 논리 module, 지급파일 의존성, IAM/이벤트 연결, fixedSpec과 behaviorCheck를 먼저 설계하라. 모든 필수 구성요소는 module 또는 includedResources에 매핑해야 한다.
+""" + json.dumps(blueprint.model_dump(by_alias=True), ensure_ascii=False)
+
+def reviewer_prompt(blueprint: AssignmentBlueprint) -> str:
+    return """[Reviewer 단계]
+아래 Blueprint를 Reviewer 관점에서 검사하라. 누락된 실행 리소스, 지급파일 사용처, 환경 변수, 이벤트/권한/정책, end-to-end 단계, fixedSpec에 섞인 검증 조건을 찾아 오류 목록으로 반환하라. PASS가 아니면 Writer 단계로 진행하지 않는다.
+""" + json.dumps(blueprint.model_dump(by_alias=True), ensure_ascii=False)
+
 def blueprint_prompt(blueprint: AssignmentBlueprint) -> str:
-    return "사전 설계 Blueprint를 검토하고 누락 없이 반영하라.\n" + json.dumps(blueprint.model_dump(by_alias=True), ensure_ascii=False)
+    return architect_prompt(blueprint) + "\n\n" + reviewer_prompt(blueprint)
