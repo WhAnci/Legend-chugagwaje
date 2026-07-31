@@ -1,17 +1,20 @@
 import logging, os, json
 from .models import TaskDraft, TaskRequest
 from .blueprint import AssignmentBlueprint, create_blueprint, validate_blueprint, review_generated_draft, blueprint_prompt
+from . import ai_control
 
 logger = logging.getLogger("aws-task-agent")
 
 async def generate(req: TaskRequest) -> TaskDraft:
+    if not ai_control.is_enabled():
+        raise RuntimeError("AI 생성이 현재 꺼져 있습니다. /ai on 또는 /ai opencode를 사용하세요.")
     # AssignmentBlueprint is designed and reviewed before any assignment JSON/PDF generation.
     blueprint = AssignmentBlueprint.model_validate_json(req.approved_blueprint) if req.approved_blueprint else create_blueprint(req)
     blueprint_errors = validate_blueprint(blueprint)
     if blueprint_errors:
         raise RuntimeError("Blueprint 검증 실패: " + "; ".join(blueprint_errors))
     req = req.model_copy(update={"analysis": (req.analysis + "\n\n" if req.analysis else "") + blueprint_prompt(blueprint)})
-    backend = os.getenv("AGENT_BACKEND", "opencode").lower()
+    backend = (ai_control.backend() or os.getenv("AGENT_BACKEND", "opencode")).lower()
 
     def reviewed(draft: TaskDraft) -> TaskDraft:
         errors = review_generated_draft(blueprint, draft)
