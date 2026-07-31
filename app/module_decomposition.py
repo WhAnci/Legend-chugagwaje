@@ -2,6 +2,16 @@
 import json
 import re
 
+OFFICIAL_NAMES = {
+    "api gateway": "Amazon API Gateway", "api gateway websocket": "Amazon API Gateway", "sqs": "Amazon SQS", "lambda": "AWS Lambda", "dynamodb": "Amazon DynamoDB", "s3": "Amazon S3", "cloudfront": "Amazon CloudFront", "cloudfront functions": "CloudFront Functions", "aws waf": "AWS WAF", "waf": "AWS WAF", "ecs": "Amazon ECS", "ecr": "Amazon ECR", "ec2": "Amazon EC2", "alb": "Application Load Balancer", "eventbridge": "Amazon EventBridge", "eventbridge pipes": "Amazon EventBridge Pipes", "step functions": "AWS Step Functions", "cognito": "Amazon Cognito", "cloudwatch": "Amazon CloudWatch", "rds": "Amazon RDS", "vpc": "Amazon VPC", "route 53": "Amazon Route 53", "route53": "Amazon Route 53", "backup": "AWS Backup", "kms": "AWS KMS", "ssm": "AWS Systems Manager", "vpc lattice": "Amazon VPC Lattice"
+}
+
+def official_service(value: str) -> str:
+    text = str(value or "").lower()
+    for key, official in sorted(OFFICIAL_NAMES.items(), key=lambda item: len(item[0]), reverse=True):
+        if key in text: return official
+    return str(value or "").strip()
+
 CATALOG = [
     ("CloudFront Functions", "Function", "CloudFront Function 요청 검증", ("cloudfront function", "cloudfront functions"), ("function", "handler", "event", "viewer request", "header", "code")),
     ("AWS WAF", "WebACL", "AWS WAF Web ACL", ("aws waf", "waf", "web acl", "webacl"), ("acl", "scope", "rule", "block", "allow", "ip set", "managed rule")),

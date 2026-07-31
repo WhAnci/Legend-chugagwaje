@@ -95,6 +95,8 @@ def document_html(doc: TaskDocument) -> str:
         out.append("</table>")
     for module in doc.modules:
         out.append(f"<h1 class='module-title'><span class='no'>No {module.number}.</span>{esc(module.title)}</h1>")
+        if module.subtitle and module.subtitle.strip().lower() != module.title.strip().lower():
+            out.append(f"<p class='lead'><span class='lead-label'>역할</span>{esc(module.subtitle)}</p>")
         if module.region_notice: out.append(f"<p class='lead'><span class='lead-label'>리전 안내</span>{esc(module.region_notice)}</p>")
         if module.scenario or module.description: out.append(f"<p class='lead'><span class='lead-label'>과제 시나리오</span>{esc(module.scenario or module.description)}</p>")
         visible_specs = module.fixed_specs or module.specs

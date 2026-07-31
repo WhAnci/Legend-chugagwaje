@@ -2,7 +2,7 @@ import re, subprocess, tempfile
 from pathlib import Path
 from .models import TaskDraft, ValidationResult
 from .consistency import check_consistency
-from .module_decomposition import detect
+from .module_decomposition import detect, official_service
 
 SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|aws_secret_access_key|BEGIN PRIVATE KEY|discord\.com/api/webhooks)", re.I)
 
@@ -26,7 +26,20 @@ def validate(draft: TaskDraft) -> ValidationResult:
         modules = draft.document.modules
         numbers = [m.number for m in modules]
         if numbers != list(range(1, len(numbers) + 1)): errors.append("module 번호가 1부터 연속되지 않습니다.")
+        seen_services = set()
         for module in modules:
+            expected_service = official_service(module.service or module.title)
+            if expected_service != module.title and module.title not in {"Security Group", "IAM Role"}:
+                errors.append(f"module.service와 title이 일치하지 않습니다: {module.service} / {module.title}")
+            service_key = expected_service.lower()
+            if service_key in seen_services and service_key not in {"security group", "iam role"}:
+                errors.append(f"동일 AWS 서비스 module이 중복됩니다: {module.title}")
+            seen_services.add(service_key)
+            labels = " ".join(str(spec.label).lower() for spec in (module.fixed_specs or module.specs))
+            if "dynamodb" in service_key and re.search(r"runtime|handler|function name", labels):
+                errors.append("DynamoDB module에 Lambda 설정이 섞여 있습니다.")
+            if "s3" in service_key and re.search(r"runtime|handler|function name", labels):
+                errors.append("S3 module에 Lambda 설정이 섞여 있습니다.")
             detected = detect(f"{module.title} {module.service} {module.resource_type}".lower())
             if len(detected) >= 2:
                 errors.append(f"여러 핵심 서비스가 하나의 module에 합쳐져 있습니다: {module.title}")

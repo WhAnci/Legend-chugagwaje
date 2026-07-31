@@ -1,6 +1,6 @@
 import json, re
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from .module_decomposition import decompose_document
+from .module_decomposition import decompose_document, official_service
 
 def to_camel(value: str) -> str:
     head, *tail = value.split("_")
@@ -52,6 +52,7 @@ class TaskModule(StructuredModel):
     id: str = ""
     number: int = 1
     title: str
+    subtitle: str = ""
     service: str = ""
     resource_type: str = ""
     description: str = ""
@@ -191,6 +192,13 @@ class TaskDraft(BaseModel):
                     if len(promoted) >= 2: doc["modules"] = promoted
             doc = decompose_document(doc)
             used_ids = set()
+            for module in doc.get("modules", []):
+                if not isinstance(module, dict): continue
+                raw_title = str(module.get("title", "")).strip()
+                service = official_service(module.get("service", "") or raw_title)
+                module["service"] = service
+                if not raw_title or raw_title.lower() != service.lower(): module["subtitle"] = module.get("subtitle") or raw_title
+                module["title"] = service
             for index, module in enumerate(doc.get("modules", []), 1):
                 if not isinstance(module, dict): continue
                 base = re.sub(r"[^a-z0-9]+", "-", str(module.get("service", "") or module.get("title", "")).lower()).strip("-") or f"module-{index}"

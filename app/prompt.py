@@ -25,7 +25,8 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - requirements: 문자열 배열
 - precautions: 문자열 배열
 - provided_files: name, description 배열
-- modules: id(영문 소문자 kebab-case 안정 ID, 예: `api-gateway`), number, service, resourceType, title, description(1~3문단), fixedSpecs(label/value 배열), inferredConstraints(string 배열), specs(내부 호환용 선택 필드), dependencies, providedFiles
+- modules: id(영문 소문자 kebab-case 안정 ID, 예: `api-gateway`), number, service, resourceType, title, subtitle(선택), description(1~3문단), fixedSpecs(label/value 배열), inferredConstraints(string 배열), specs(내부 호환용 선택 필드), dependencies, providedFiles
+- title은 반드시 service의 AWS 공식 서비스명으로 작성한다. 역할 설명은 subtitle에 둔다. 예: service=`AWS Lambda`, title=`AWS Lambda`, subtitle=`이벤트 처리 함수`.
 - assignment-level verification, cleanup만 최상위에서 관리한다. modules에는 sections를 사용하지 않는다.
 - module에는 tasks, notes, verification, instructions, stepByStep, implementationGuide 필드를 넣지 않는다.
 - 과제 본문 순서는 과제 개요 → 아키텍처 구성 → No module이다. overview와 architecture는 모든 module 앞에 한 번만 출력한다.
