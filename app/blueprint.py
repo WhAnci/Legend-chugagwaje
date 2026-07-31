@@ -44,9 +44,28 @@ class AssignmentBlueprint(BlueprintModel):
     dependencies: list[dict] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
 
+SERVICE_ALIASES = {
+    "Amazon ECR": ("ecr", "elastic container registry", "container registry"),
+    "Amazon EventBridge": ("eventbridge", "event bus", "event rule"),
+    "Amazon Route 53": ("route 53", "route53", "dns", "hosted zone", "failover"),
+    "Amazon VPC": ("vpc", "subnet", "route table", "internet gateway", "nat gateway"),
+    "Amazon EC2": ("ec2", "elastic compute cloud", "instance"),
+    "Application Load Balancer": ("alb", "application load balancer", "target group", "listener"),
+    "Amazon DynamoDB": ("dynamodb", "dynamo db", "partition key", "table"),
+    "Amazon SQS": ("sqs", "queue", "visibility timeout", "dead letter"),
+    "Amazon SNS": ("sns", "topic", "subscription", "publish"),
+    "AWS KMS": ("kms", "key policy", "customer managed key", "sse-kms"),
+    "AWS Secrets Manager": ("secrets manager", "secret name", "getsecretvalue"),
+    "Amazon CloudWatch": ("cloudwatch", "log group", "alarm", "metric"),
+    "AWS IAM": ("iam", "execution role", "trust policy", "allowed actions"),
+}
+
 SERVICE_HINTS = [
     ("AWS Lambda", ("lambda", "함수"), "Function", "실행 코드"),
     ("Amazon S3", ("s3", "버킷"), "Bucket", "객체 저장"),
+    ("Amazon CloudFront", ("cloudfront", "cdn", "edge"), "Distribution", "엣지 콘텐츠 배포"),
+    ("AWS WAF", ("waf", "web acl", "sqli", "xss", "지오 블로킹"), "Web ACL", "웹 공격·지역 트래픽 차단"),
+    ("CloudFront Functions", ("cloudfront function", "보안 헤더", "csp", "hsts"), "Function", "엣지 요청/응답 헤더 처리"),
     ("AWS KMS", ("kms", "암호화 키"), "KMS Key", "암호화"),
     ("Amazon SNS", ("sns", "topic", "알림"), "Topic", "알림 발행"),
     ("Amazon SQS", ("sqs", "queue", "큐"), "Queue", "메시지 버퍼"),
@@ -59,6 +78,9 @@ SERVICE_HINTS = [
 ]
 
 def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
+    request_object = {}
+    try: request_object = json.loads(req.raw) if req.raw.strip().startswith("{") else {}
+    except Exception: request_object = {}
     text = f"{req.raw} {req.service} {req.analysis}".lower()
     components = []
     for service, hints, resource, role in SERVICE_HINTS:
@@ -67,6 +89,13 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             components.append(BlueprintComponent(id=slug, service=service, resource_type=resource, role=role))
     if "kms" in text or "sse-kms" in text:
         components.append(BlueprintComponent(id="kms-key", service="AWS KMS", resource_type="KMS Key", role="암호화 키")) if not any(c.service == "AWS KMS" for c in components) else None
+    # Extract services from primaryService/supportingServices/coreWork as well as the raw prose.
+    # This prevents a topic JSON from collapsing to only its primary service.
+    for service, aliases in SERVICE_ALIASES.items():
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(alias.lower())}(?![a-z0-9])", text) if re.fullmatch(r"[a-z0-9 -]+", alias.lower()) else alias.lower() in text for alias in aliases):
+            if not any(component.service == service for component in components):
+                resource, role = {"Amazon ECR": ("Repository", "이미지 저장·검사"), "Amazon EventBridge": ("Rule", "이벤트 라우팅"), "Amazon Route 53": ("DNS", "DNS 장애 전환"), "AWS IAM": ("Policy/Role", "접근 제어")}.get(service, ("Resource", "아키텍처 구성요소"))
+                components.append(BlueprintComponent(id=re.sub(r"[^a-z0-9]+", "-", service.lower()).strip("-"), service=service, resource_type=resource, role=role))
     # Architecture closure: infer mandatory execution, event, permission and policy components
     # before showing the proposal. A primary service alone is never considered complete.
     def add_component(component_id, service, resource_type, role, module_service=None):
@@ -107,7 +136,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("api-lambda-integration", "Amazon API Gateway", "Lambda Integration", "API 요청을 Lambda로 전달", "Amazon API Gateway")
         add_component("api-lambda-permission", "AWS Lambda", "Resource Permission", "API Gateway의 Lambda 호출 허용", "AWS Lambda")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     # Supporting components are included in the owning logical module, not dropped or made into noise modules.
     for component in components:
@@ -143,7 +172,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
-    return AssignmentBlueprint(goal=req.raw.strip(), data_flow=flows, components=components, logical_modules=modules, provided_files=files, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
+    goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())
+    return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
 
 def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     errors = []
