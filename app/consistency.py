@@ -33,6 +33,25 @@ def check_consistency(draft: TaskDraft) -> list[str]:
     if round(total, 2) != 6.0: errors.append(f"checks 총점이 6.0이 아닙니다: {total:g}")
     doc_text = draft.document.model_dump_json() if draft.document else ""
     module_titles = {m.title for m in draft.document.modules} if draft.document else set()
+    module_blob = {m.id or m.title: m.model_dump_json().lower() for m in draft.document.modules} if draft.document else {}
+    architecture_text = " ".join([draft.document.architecture, draft.document.overview, *draft.document.requirements]).lower() if draft.document else ""
+    # 실행 구성요소와 지급파일은 반드시 실제 module에 귀속되어야 한다.
+    execution_markers = {"lambda": ("lambda", "runtime", "handler", "function"), "api gateway": ("api gateway", "rest api", "http api"), "route 53": ("route 53", "route53", "failover record", "hosted zone")}
+    for component, markers in execution_markers.items():
+        if any(marker in architecture_text for marker in markers) and not any(any(marker in text for marker in markers) for text in module_blob.values()):
+            errors.append(f"아키텍처의 실행 구성요소가 module에 없습니다: {component}")
+    has_lambda_module = any("lambda" in text or "function" in text for text in module_blob.values())
+    for module in draft.document.modules if draft.document else []:
+        text = module.model_dump_json().lower()
+        if "api gateway" in text and "integration" in text and not has_lambda_module:
+            errors.append(f"API Gateway-Lambda integration에 대응하는 Lambda module이 없습니다: {module.title}")
+        if any(token in text for token in ("hosted zone", "failover", "record name", "failover role")) and not any(token in module.title.lower() for token in ("route 53", "route53", "dns")):
+            errors.append(f"Route 53 DNS/Failover 요구사항이 잘못된 module에 분류되었습니다: {module.title}")
+    for file in draft.deployment_files:
+        if "lambda" in file.path.lower() and not any("lambda" in text or "function" in text for text in module_blob.values()):
+            errors.append(f"지급파일을 사용하는 Lambda module이 없습니다: {file.path}")
+        if file.used_by_module and not any(module_id in module_blob for module_id in file.used_by_module):
+            errors.append(f"지급파일의 usedByModule이 존재하지 않습니다: {file.path}")
     module_ids = {m.id for m in draft.document.modules} if draft.document else set()
     for check in checks:
         if check.module_id:
@@ -40,6 +59,10 @@ def check_consistency(draft: TaskDraft) -> list[str]:
                 errors.append(f"[{check.id}] 존재하지 않는 moduleId입니다: {check.module_id}")
         elif not _module_matches(check.module, module_titles):
             errors.append(f"[{check.id}] 존재하지 않는 module입니다: {check.module}")
+        for module in (draft.document.modules if draft.document else []):
+            labels = " ".join(str(spec.label).lower() for spec in (module.fixed_specs or module.specs))
+            if re.search(r"failover success|status ?code|body ?contain|bodycontains", labels):
+                errors.append(f"[{module.title}] 동작 검증 조건이 fixedSpec에 섞였습니다.")
         for key, value in check.expected.items():
             if str(key).lower() in {"status", "dbinstancestatus", "state", "health", "health_status", "availability"}: continue
             if isinstance(value, (str, int, float)) and not isinstance(value, bool) and str(value).strip() and str(value).lower() not in doc_text.lower():

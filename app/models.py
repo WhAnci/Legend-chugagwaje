@@ -19,9 +19,10 @@ class TaskRequest(BaseModel):
     analysis: str = ""
     previous_draft: str = ""
 
-class DeploymentFile(BaseModel):
+class DeploymentFile(StructuredModel):
     path: str
     content: str
+    used_by_module: list[str] = Field(default_factory=list)
 
 class GradingCheck(StructuredModel):
     id: str
@@ -67,6 +68,7 @@ class TaskModule(StructuredModel):
     scenario: str = ""
     region_notice: str = ""
     architecture_flow: str = ""
+    deployments: list[dict] = Field(default_factory=list)
     sections: list[TaskSection] = Field(default_factory=list)
     verification: list[str] = Field(default_factory=list)
     cleanup: list[str] = Field(default_factory=list)
@@ -86,6 +88,7 @@ class TaskMeta(StructuredModel):
 class ProvidedFile(StructuredModel):
     name: str
     description: str = ""
+    used_by_module: list[str] = Field(default_factory=list)
 
 class TaskDocument(StructuredModel):
     meta: TaskMeta

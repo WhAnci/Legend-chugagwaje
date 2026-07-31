@@ -26,7 +26,11 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - precautions: 문자열 배열
 - provided_files: name, description 배열
 - modules: id(영문 소문자 kebab-case 안정 ID, 예: `api-gateway`), number, title, primaryService, role, includedResources, service, resourceType, subtitle(선택), description(1~3문단), fixedSpecs(label/value 배열), inferredConstraints(string 배열), specs(내부 호환용 선택 필드), dependencies, providedFiles
+- JSON을 바로 작성하지 말고 먼저 목표→아키텍처 구성요소→요청/데이터 흐름→실행 구성요소→지급파일 사용처→논리 module→gradingSpec 순서로 내부 설계를 수행한다. 생성 전 architecture의 모든 실행 구성요소가 module 또는 includedResources에 대응하는지 확인한다.
 - 모듈은 AWS API 리소스 하나가 아니라 하나의 아키텍처 역할을 완성하는 리소스 묶음으로 설계한다. ALB+Listener+Target Group+Health Check는 하나의 Application Load Balancer module, Lambda+Role+Environment+Event Source Mapping은 하나의 AWS Lambda module처럼 함께 구성되는 하위 리소스를 묶는다. VPC, 애플리케이션 실행 계층, 트래픽 분산 계층처럼 역할이 다른 계층은 분리한다.
+- Lambda 지급파일(`lambda_function.py`)은 반드시 Lambda module의 `providedFiles`와 `deployment_files[].usedByModule`에 연결한다. API Gateway-Lambda 통합에는 함수명·runtime·handler를 포함한다. Route 53 Hosted Zone/Record/Health Check/Failover는 ALB module에 넣지 않는다.
+- `StatusCode`, `BodyContains`, `Failover success`, 응답 코드와 같은 검증 결과·기대 동작은 fixedSpecs가 아니라 behavior check/gradingSpec으로 표현한다.
+- 다중 리전은 각 deployment에 role과 region을 명시하고, primary/secondary API와 Lambda 연동이 누락되지 않았는지 확인한다.
 - title은 대표 AWS 서비스 또는 논리 계층명으로 작성한다. 역할 설명은 role/subtitle에 둔다. `primaryService`는 대표 서비스, `includedResources`는 묶인 하위 리소스 목록이다. 예: title=`Application Load Balancer`, primaryService=`Elastic Load Balancing`, includedResources=[`Application Load Balancer`, `HTTP Listener`, `Target Group`, `Health Check`].
 - assignment-level verification, cleanup만 최상위에서 관리한다. modules에는 sections를 사용하지 않는다.
 - module에는 tasks, notes, verification, instructions, stepByStep, implementationGuide 필드를 넣지 않는다.

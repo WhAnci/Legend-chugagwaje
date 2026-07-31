@@ -21,7 +21,7 @@ def validate(draft: TaskDraft) -> ValidationResult:
     if draft.checks:
         errors.extend(check_consistency(draft))
     else:
-        warnings.append("공통 grading checks가 없어 산출물 간 정합성을 완전히 검증할 수 없습니다.")
+        errors.append("공통 gradingSpec/checks가 없어 아키텍처·모듈·지급파일 정합성을 검증할 수 없습니다.")
     if draft.document:
         modules = draft.document.modules
         numbers = [m.number for m in modules]

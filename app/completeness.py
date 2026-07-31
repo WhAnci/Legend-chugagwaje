@@ -56,9 +56,9 @@ def _complete_secret_bundle(raw, draft):
     document["requirements"] = list(dict.fromkeys((document.get("requirements") or []) + ["Internet Gateway와 NAT Gateway를 사용하지 않는 격리 네트워크", "시크릿 원문 비노출", "Endpoint를 통한 실제 조회 동작"]))
     data["document"] = document
     files = data.setdefault("deployment_files", [])
-    if not any(isinstance(item, dict) and item.get("path") == "lambda_function.py" for item in files): files.append({"path": "lambda_function.py", "content": SECRET_LAMBDA})
+    if not any(isinstance(item, dict) and item.get("path") == "lambda_function.py" for item in files): files.append({"path": "lambda_function.py", "content": SECRET_LAMBDA, "usedByModule": ["aws-lambda"]})
     provided = data.get("provided_files") or []
-    if not any(isinstance(item, dict) and item.get("name") == "lambda_function.py" for item in provided): provided.append({"name": "lambda_function.py", "description": "Secrets Manager 조회 및 비민감 결과 반환 Lambda 코드"})
+    if not any(isinstance(item, dict) and item.get("name") == "lambda_function.py" for item in provided): provided.append({"name": "lambda_function.py", "description": "Secrets Manager 조회 및 비민감 결과 반환 Lambda 코드", "usedByModule": ["aws-lambda"]})
     data["provided_files"] = provided
     return TaskDraft.model_validate(data)
 
