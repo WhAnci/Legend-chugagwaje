@@ -339,8 +339,12 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
         await message.edit(content="❌ 구성안 검토를 통과하지 못했습니다. PDF와 파일은 생성하지 않습니다.\n" + "\n".join(f"- {error}" for error in errors[:8]), embed=None, view=None)
         logger.warning("blueprint rejected: %s", errors)
         return
-    pending_blueprints[message.id] = {"raw": raw, "blueprint": blueprint, "channel_id": message.channel.id, "owner_id": owner_id}
-    await message.edit(content=None, embed=blueprint_embed(blueprint), view=BlueprintApprovalView(owner_id, message.id))
+    # 사용자 확인 버튼 없이, OpenCode Reviewer를 통과한 Blueprint를 즉시 승인한다.
+    await message.edit(content="✅ OpenCode Blueprint 검토 통과\n🛠️ 승인된 구성안으로 과제 산출물을 자동 생성합니다.", embed=blueprint_embed(blueprint), view=None)
+    context = JobContext(job_id=uuid.uuid4().hex, channel_id=message.channel.id, message_id=message.id, user_id=owner_id, source=message)
+    active_jobs[context.job_id] = context
+    logger.info("approved blueprint auto-generation started job=%s", context.job_id)
+    await run_generation(message, raw, context, blueprint)
 
 async def choose_again(interaction: discord.Interaction, topic: dict | None, previous: list[dict] | None = None):
     if not has_authorized_role(interaction.user):
