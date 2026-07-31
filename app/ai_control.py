@@ -12,8 +12,8 @@ def configure(mode: str) -> tuple[bool, str]:
     elif value in {"off", "끄기", "비활성화"}: _enabled = False
     elif value in {"opencode", "open-code"}: _enabled, _backend = True, "opencode"
     elif value in {"gemini"}: _enabled, _backend = True, "gemini"
-    elif value in {"reset", "기본값"}: _enabled, _backend = True, ""
-    else: raise ValueError("사용법: on, off, opencode, gemini, reset")
+    elif value in {"reset", "기본값", "auto", "자동"}: _enabled, _backend = True, ""
+    else: raise ValueError("사용법: auto, opencode, gemini, status")
     return status()
 
 def is_enabled() -> bool: return _enabled

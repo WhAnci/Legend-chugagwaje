@@ -363,28 +363,27 @@ async def choose_again(interaction: discord.Interaction, topic: dict | None, pre
     status = await interaction.channel.fetch_message(interaction.message.id)
     await show_blueprint(status, topic_prompt(topic), interaction.user.id)
 
-@bot.tree.command(name="ai", description="AI 생성 기능과 백엔드를 켜거나 끕니다.")
-@app_commands.describe(mode="on/off/opencode/gemini/reset/status")
-async def ai_command(interaction: discord.Interaction, mode: str = "status"):
+@bot.tree.command(name="model", description="과제 생성 AI 모델을 선택합니다.")
+@app_commands.describe(mode="auto/opencode/gemini/status")
+async def model_command(interaction: discord.Interaction, mode: str = "status"):
     if not has_authorized_role(interaction.user):
         await interaction.response.send_message("권한이 없습니다.", ephemeral=True); return
     try:
-        if mode.lower() in {"status", "상태"}:
-            enabled, backend = ai_control.status()
-        else:
-            enabled, backend = ai_control.configure(mode)
-        state = "ON" if enabled else "OFF"
-        await interaction.response.send_message(f"AI 상태: **{state}**\n백엔드: **{backend}**", ephemeral=True)
+        if mode.lower() in {"status", "상태"}: enabled, backend = ai_control.status()
+        else: enabled, backend = ai_control.configure(mode)
+        selected = backend if backend != "환경설정" else "auto"
+        await interaction.response.send_message(f"AI 모델: **{selected}**\n상태: **{'ON' if enabled else 'OFF'}**", ephemeral=True)
     except ValueError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
 
-@bot.command(name="ai")
-async def ai_prefix_command(ctx: commands.Context, mode: str = "status"):
+@bot.command(name="model")
+async def model_prefix_command(ctx: commands.Context, mode: str = "status"):
     if not has_authorized_role(ctx.author): return
     try:
         if mode.lower() in {"status", "상태"}: enabled, backend = ai_control.status()
         else: enabled, backend = ai_control.configure(mode)
-        await ctx.reply(f"AI 상태: **{'ON' if enabled else 'OFF'}**\n백엔드: **{backend}**", mention_author=False)
+        selected = backend if backend != "환경설정" else "auto"
+        await ctx.reply(f"AI 모델: **{selected}**\n상태: **{'ON' if enabled else 'OFF'}**", mention_author=False)
     except ValueError as exc: await ctx.reply(str(exc), mention_author=False)
 
 @bot.tree.command(name="usage", description="AI API 사용량을 확인합니다.")
