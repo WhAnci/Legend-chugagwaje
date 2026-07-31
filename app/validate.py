@@ -32,7 +32,7 @@ def validate(draft: TaskDraft) -> ValidationResult:
             if strict_modules and (not module.description.strip() or not (module.fixed_specs or module.specs)):
                 errors.append(f"module에 description 또는 fixedSpec이 없습니다: {module.title}")
             expected_service = official_service(module.service or module.title)
-            if expected_service != module.title and module.title not in {"Security Group", "IAM Role"}:
+            if official_service(module.title) != expected_service and module.title not in {"Security Group", "IAM Role", "IAM 및 접근 제어", "VPC Routing"}:
                 errors.append(f"module.service와 title이 일치하지 않습니다: {module.service} / {module.title}")
             service_key = expected_service.lower()
             if service_key in seen_services and service_key not in {"security group", "iam role"}:

@@ -53,6 +53,9 @@ class TaskModule(StructuredModel):
     number: int = 1
     title: str
     subtitle: str = ""
+    primary_service: str = ""
+    role: str = ""
+    included_resources: list[str] = Field(default_factory=list)
     service: str = ""
     resource_type: str = ""
     description: str = ""
@@ -195,10 +198,14 @@ class TaskDraft(BaseModel):
             for module in doc.get("modules", []):
                 if not isinstance(module, dict): continue
                 raw_title = str(module.get("title", "")).strip()
-                service = official_service(module.get("service", "") or raw_title)
+                service = official_service(module.get("primaryService", "") or module.get("service", "") or raw_title)
                 module["service"] = service
-                if not raw_title or raw_title.lower() != service.lower(): module["subtitle"] = module.get("subtitle") or raw_title
-                module["title"] = service
+                module["primaryService"] = module.get("primaryService") or service
+                # Logical titles such as "Amazon EC2 애플리케이션" are retained when they still identify the primary service.
+                title_service = official_service(raw_title)
+                logical_title = raw_title if raw_title and title_service == service else service
+                if not raw_title or raw_title.lower() != logical_title.lower(): module["subtitle"] = module.get("subtitle") or (raw_title if raw_title != logical_title else "")
+                module["title"] = logical_title
             for index, module in enumerate(doc.get("modules", []), 1):
                 if not isinstance(module, dict): continue
                 base = re.sub(r"[^a-z0-9]+", "-", str(module.get("service", "") or module.get("title", "")).lower()).strip("-") or f"module-{index}"

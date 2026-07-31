@@ -25,8 +25,9 @@ SYSTEM = """너는 AWS 클라우드 대회용 추가과제 한 개를 설계하�
 - requirements: 문자열 배열
 - precautions: 문자열 배열
 - provided_files: name, description 배열
-- modules: id(영문 소문자 kebab-case 안정 ID, 예: `api-gateway`), number, service, resourceType, title, subtitle(선택), description(1~3문단), fixedSpecs(label/value 배열), inferredConstraints(string 배열), specs(내부 호환용 선택 필드), dependencies, providedFiles
-- title은 반드시 service의 AWS 공식 서비스명으로 작성한다. 역할 설명은 subtitle에 둔다. 예: service=`AWS Lambda`, title=`AWS Lambda`, subtitle=`이벤트 처리 함수`.
+- modules: id(영문 소문자 kebab-case 안정 ID, 예: `api-gateway`), number, title, primaryService, role, includedResources, service, resourceType, subtitle(선택), description(1~3문단), fixedSpecs(label/value 배열), inferredConstraints(string 배열), specs(내부 호환용 선택 필드), dependencies, providedFiles
+- 모듈은 AWS API 리소스 하나가 아니라 하나의 아키텍처 역할을 완성하는 리소스 묶음으로 설계한다. ALB+Listener+Target Group+Health Check는 하나의 Application Load Balancer module, Lambda+Role+Environment+Event Source Mapping은 하나의 AWS Lambda module처럼 함께 구성되는 하위 리소스를 묶는다. VPC, 애플리케이션 실행 계층, 트래픽 분산 계층처럼 역할이 다른 계층은 분리한다.
+- title은 대표 AWS 서비스 또는 논리 계층명으로 작성한다. 역할 설명은 role/subtitle에 둔다. `primaryService`는 대표 서비스, `includedResources`는 묶인 하위 리소스 목록이다. 예: title=`Application Load Balancer`, primaryService=`Elastic Load Balancing`, includedResources=[`Application Load Balancer`, `HTTP Listener`, `Target Group`, `Health Check`].
 - assignment-level verification, cleanup만 최상위에서 관리한다. modules에는 sections를 사용하지 않는다.
 - module에는 tasks, notes, verification, instructions, stepByStep, implementationGuide 필드를 넣지 않는다.
 - 과제 본문 순서는 과제 개요 → 아키텍처 구성 → No module이다. overview와 architecture는 모든 module 앞에 한 번만 출력한다.
