@@ -67,7 +67,71 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             components.append(BlueprintComponent(id=slug, service=service, resource_type=resource, role=role))
     if "kms" in text or "sse-kms" in text:
         components.append(BlueprintComponent(id="kms-key", service="AWS KMS", resource_type="KMS Key", role="암호화 키")) if not any(c.service == "AWS KMS" for c in components) else None
-    modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components]
+    # Architecture closure: infer mandatory execution, event, permission and policy components
+    # before showing the proposal. A primary service alone is never considered complete.
+    def add_component(component_id, service, resource_type, role, module_service=None):
+        existing = next((c for c in components if c.id == component_id), None)
+        if not existing:
+            components.append(BlueprintComponent(id=component_id, service=service, resource_type=resource_type, role=role))
+        owner = module_service or service
+        owner_component = next((c for c in components if c.service == owner), None)
+        if owner_component:
+            owner_id = owner_component.id
+        else:
+            owner_id = component_id
+        return owner_id
+
+    lambda_component = next((c for c in components if c.service == "AWS Lambda"), None)
+    s3_component = next((c for c in components if c.service == "Amazon S3"), None)
+    ecr_component = next((c for c in components if c.service == "Amazon ECR"), None)
+    if lambda_component:
+        add_component("lambda-execution-role", "AWS IAM", "Lambda Execution Role", "Lambda 권한과 로그 기록", "AWS Lambda")
+        add_component("cloudwatch-lambda-logs", "Amazon CloudWatch", "Log Group", "Lambda 실행 로그", "AWS Lambda")
+    if s3_component and lambda_component and any(x in text for x in ("event", "objectcreated", "이벤트")):
+        add_component("s3-event-notification", "Amazon S3", "Event Notification", "객체 이벤트 전달", "Amazon S3")
+        add_component("lambda-invoke-permission", "AWS Lambda", "Resource Permission", "S3의 Lambda 호출 허용", "AWS Lambda")
+    if ecr_component and any(x in text for x in ("취약", "vulnerability", "scan", "격리", "isolate")):
+        add_component("eventbridge-scan-rule", "Amazon EventBridge", "Rule", "ECR scan 완료 이벤트 라우팅")
+        if not lambda_component:
+            lambda_component = BlueprintComponent(id="aws-lambda", service="AWS Lambda", resource_type="Function", role="취약 이미지 처리")
+            components.append(lambda_component)
+        add_component("lambda-execution-role", "AWS IAM", "Lambda Execution Role", "Lambda 권한과 로그 기록", "AWS Lambda")
+        add_component("lambda-invoke-permission", "AWS Lambda", "Resource Permission", "EventBridge의 Lambda 호출 허용", "AWS Lambda")
+    if s3_component and any(x in text for x in ("sse-kms", "kms", "암호화")):
+        add_component("kms-key", "AWS KMS", "KMS Key", "S3 객체 암호화", "Amazon S3")
+        add_component("kms-key-policy", "AWS KMS", "Key Policy", "S3/Lambda 암호화 권한", "Amazon S3")
+    if lambda_component and any(x in text for x in ("sns", "publish", "알림")):
+        add_component("sns-topic", "Amazon SNS", "Topic", "Lambda 결과 알림")
+        add_component("sns-publish-permission", "AWS IAM", "IAM Policy", "Lambda SNS Publish 권한", "AWS Lambda")
+    if any(x in text for x in ("api gateway",)) and lambda_component:
+        add_component("api-lambda-integration", "Amazon API Gateway", "Lambda Integration", "API 요청을 Lambda로 전달", "Amazon API Gateway")
+        add_component("api-lambda-permission", "AWS Lambda", "Resource Permission", "API Gateway의 Lambda 호출 허용", "AWS Lambda")
+
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic"}
+    modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
+    # Supporting components are included in the owning logical module, not dropped or made into noise modules.
+    for component in components:
+        if component.service == "AWS IAM":
+            owner = next((m for m in modules if "lambda" in m.title.lower()), None)
+            if owner: owner.component_ids.append(component.id)
+        elif component.id in {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-permission", "sns-publish-permission"}:
+            owner = next((m for m in modules if "lambda" in m.title.lower()), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "s3-event-notification":
+            owner = next((m for m in modules if m.title == "Amazon S3"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"kms-key", "kms-key-policy"}:
+            owner = next((m for m in modules if m.title == "AWS KMS"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "sns-topic":
+            owner = next((m for m in modules if m.title == "Amazon SNS"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "kms-key-policy":
+            owner = next((m for m in modules if m.title == "AWS KMS"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "eventbridge-scan-rule":
+            owner = next((m for m in modules if m.title == "Amazon EventBridge"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
     files = []
     if "lambda_function.py" in text or "lambda" in text or "함수" in text:
         files.append(BlueprintFile(path="lambda_function.py", used_by_module=["aws-lambda"], dependencies=["Function", "Runtime", "Handler", "Execution Role"]))
@@ -76,7 +140,10 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         flows.append(DataFlow(from_node=left.strip(), to_node=right.strip(), action=(action or "request/data flow").strip()))
     if not flows and len(components) >= 2:
         flows = [DataFlow(from_node=components[i].service, to_node=components[i + 1].service, action="configured integration") for i in range(len(components) - 1)]
-    return AssignmentBlueprint(goal=req.raw.strip(), data_flow=flows, components=components, logical_modules=modules, provided_files=files, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
+    behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
+    if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
+    if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
+    return AssignmentBlueprint(goal=req.raw.strip(), data_flow=flows, components=components, logical_modules=modules, provided_files=files, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
 
 def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     errors = []
