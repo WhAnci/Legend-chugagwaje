@@ -8,6 +8,8 @@ SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|aws_secret_access_key|BEGIN PRIVATE KEY|
 
 def validate(draft: TaskDraft) -> ValidationResult:
     errors, warnings = [], []
+    if draft.notes.startswith("BLUEPRINT_REVIEW_ERRORS:"):
+        errors.extend(draft.notes.removeprefix("BLUEPRINT_REVIEW_ERRORS: ").split(" | "))
     structured_text = draft.document.model_dump_json() if draft.document else ""
     assignment_source = draft.assignment_markdown or structured_text
     all_text = "\n".join([assignment_source, draft.rubric_markdown, draft.grading_script] + [f.content for f in draft.deployment_files])

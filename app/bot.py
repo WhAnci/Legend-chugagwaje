@@ -89,8 +89,9 @@ async def create_job(raw: str):
             logger.info("validation passed attempt=%d", _ + 1)
             return draft, result
         logger.warning("validation failed attempt=%d errors=%s", _ + 1, "; ".join(result.errors[:5]))
-        # 다음 시도는 전체 재생성이 아니라 방금 결과를 기반으로 최소 수정한다.
-        request = request.model_copy(update={"previous_draft": json.dumps(draft.model_dump(), ensure_ascii=False)})
+        # 실패한 candidate는 폐기한다. 다음 attempt에는 오류 메시지만 전달하고
+        # 이전 JSON/module을 재사용하거나 append/merge하지 않는다.
+        request = request.model_copy(update={"previous_draft": ""})
         last_errors = result.errors
     raise GeminiError("검증을 통과하지 못했습니다: " + "; ".join(last_errors))
 
