@@ -332,6 +332,7 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
     working_raw = raw
     blueprint = None
     errors = []
+    reviewer_warning = ""
     for revision in range(2):
         blueprint = create_blueprint(TaskRequest(raw=working_raw))
         errors = validate_blueprint(blueprint)
@@ -340,7 +341,10 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
                 await message.edit(content=f"🔍 OpenCode가 과제 구성안을 검토하고 있습니다... (검토 {revision + 1}/2)", embed=None, view=None)
                 errors.extend(await review_blueprint(blueprint))
             except Exception as exc:
-                errors.append(f"OpenCode Blueprint 검토 실패: {str(exc)[:300]}")
+                # OpenCode provider 장애는 Blueprint 결함이 아니다. 정적 검증으로 계속 진행한다.
+                reviewer_warning = f"OpenCode Reviewer 일시 unavailable: {str(exc) or type(exc).__name__}"
+                logger.warning(reviewer_warning)
+                errors = []
         if not errors: break
         logger.warning("blueprint revision=%d requested: %s", revision + 1, errors[:5])
         working_raw += "\n\nBlueprint 자동 수정 지시:\n" + json.dumps(errors, ensure_ascii=False)
@@ -349,7 +353,9 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
         logger.warning("blueprint rejected after revisions: %s", errors)
         return
     # 사용자 확인 버튼 없이, OpenCode Reviewer를 통과한 Blueprint를 즉시 승인한다.
-    await message.edit(content="✅ OpenCode Blueprint 검토 통과\n🛠️ 승인된 구성안으로 과제 산출물을 자동 생성합니다.", embed=blueprint_embed(blueprint), view=None)
+    notice = "✅ Blueprint 검토 통과"
+    if reviewer_warning: notice += f"\n⚠️ {reviewer_warning}\n정적 구조 검증으로 계속 진행합니다."
+    await message.edit(content=notice + "\n🛠️ 승인된 구성안으로 과제 산출물을 자동 생성합니다.", embed=blueprint_embed(blueprint), view=None)
     context = JobContext(job_id=uuid.uuid4().hex, channel_id=message.channel.id, message_id=message.id, user_id=owner_id, source=message)
     active_jobs[context.job_id] = context
     logger.info("approved blueprint auto-generation started job=%s", context.job_id)
