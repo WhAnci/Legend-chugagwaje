@@ -328,18 +328,25 @@ class BlueprintApprovalView(discord.ui.View):
         await show_blueprint(interaction.message, pending["raw"] + suffix, self.owner_id)
 
 async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
-    blueprint = create_blueprint(TaskRequest(raw=raw))
-    errors = validate_blueprint(blueprint)
-    if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true" and ai_control.backend() != "gemini":
-        # /ai gemini 상태에서는 OpenCode API 검토를 호출하지 않고 정적 Blueprint 검증만 사용한다.
-        try:
-            await message.edit(content="🔍 OpenCode가 과제 구성안을 검토하고 있습니다...", embed=None, view=None)
-            errors.extend(await review_blueprint(blueprint))
-        except Exception as exc:
-            errors.append(f"OpenCode Blueprint 검토 실패: {str(exc)[:300]}")
+    # Reviewer 오류를 사용자에게 바로 노출하지 않고 Blueprint를 새 객체로 보강해 재검토한다.
+    working_raw = raw
+    blueprint = None
+    errors = []
+    for revision in range(2):
+        blueprint = create_blueprint(TaskRequest(raw=working_raw))
+        errors = validate_blueprint(blueprint)
+        if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true" and ai_control.backend() != "gemini":
+            try:
+                await message.edit(content=f"🔍 OpenCode가 과제 구성안을 검토하고 있습니다... (검토 {revision + 1}/2)", embed=None, view=None)
+                errors.extend(await review_blueprint(blueprint))
+            except Exception as exc:
+                errors.append(f"OpenCode Blueprint 검토 실패: {str(exc)[:300]}")
+        if not errors: break
+        logger.warning("blueprint revision=%d requested: %s", revision + 1, errors[:5])
+        working_raw += "\n\nBlueprint 자동 수정 지시:\n" + json.dumps(errors, ensure_ascii=False)
     if errors:
-        await message.edit(content="❌ 구성안 검토를 통과하지 못했습니다. PDF와 파일은 생성하지 않습니다.\n" + "\n".join(f"- {error}" for error in errors[:8]), embed=None, view=None)
-        logger.warning("blueprint rejected: %s", errors)
+        await message.edit(content="❌ 구성안 자동 보정 후에도 검토를 통과하지 못했습니다. PDF와 파일은 생성하지 않습니다.\n" + "\n".join(f"- {error}" for error in errors[:8]), embed=None, view=None)
+        logger.warning("blueprint rejected after revisions: %s", errors)
         return
     # 사용자 확인 버튼 없이, OpenCode Reviewer를 통과한 Blueprint를 즉시 승인한다.
     await message.edit(content="✅ OpenCode Blueprint 검토 통과\n🛠️ 승인된 구성안으로 과제 산출물을 자동 생성합니다.", embed=blueprint_embed(blueprint), view=None)

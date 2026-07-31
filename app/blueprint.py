@@ -55,6 +55,8 @@ SERVICE_ALIASES = {
     "Amazon SQS": ("sqs", "queue", "visibility timeout", "dead letter"),
     "Amazon SNS": ("sns", "topic", "subscription", "publish"),
     "AWS KMS": ("kms", "key policy", "customer managed key", "sse-kms"),
+    "AWS CloudTrail": ("cloudtrail", "감사 로그", "접근 제어 감사"),
+    "AWS Config": ("aws config", "config rule", "구성 감사"),
     "AWS Secrets Manager": ("secrets manager", "secret name", "getsecretvalue"),
     "Amazon CloudWatch": ("cloudwatch", "log group", "alarm", "metric"),
     "AWS IAM": ("iam", "execution role", "trust policy", "allowed actions"),
@@ -84,7 +86,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     text = f"{req.raw} {req.service} {req.analysis}".lower()
     components = []
     for service, hints, resource, role in SERVICE_HINTS:
-        if any(hint in text for hint in hints):
+        if any((re.search(rf"(?<![a-z0-9]){re.escape(hint.lower())}(?![a-z0-9])", text) if re.fullmatch(r"[a-z0-9 -]+", hint.lower()) else hint.lower() in text) for hint in hints):
             slug = re.sub(r"[^a-z0-9]+", "-", service.lower()).strip("-")
             components.append(BlueprintComponent(id=slug, service=service, resource_type=resource, role=role))
     if "kms" in text or "sse-kms" in text:
@@ -133,7 +135,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("s3-event-notification", "Amazon S3", "Event Notification", "객체 이벤트 전달", "Amazon S3")
         add_component("lambda-invoke-permission", "AWS Lambda", "Resource Permission", "S3의 Lambda 호출 허용", "AWS Lambda")
     if ecr_component and any(x in text for x in ("취약", "vulnerability", "scan", "격리", "isolate")):
-        add_component("eventbridge-scan-rule", "Amazon EventBridge", "Rule", "ECR scan 완료 이벤트 라우팅")
+        add_component("amazon-eventbridge", "Amazon EventBridge", "Rule", "ECR scan 완료 이벤트 라우팅")
+        add_component("eventbridge-scan-rule", "Amazon EventBridge", "Rule", "ECR scan 완료 이벤트 라우팅", "Amazon EventBridge")
         if not lambda_component:
             lambda_component = BlueprintComponent(id="aws-lambda", service="AWS Lambda", resource_type="Function", role="취약 이미지 처리")
             components.append(lambda_component)
@@ -148,8 +151,20 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if any(x in text for x in ("api gateway",)) and lambda_component:
         add_component("api-lambda-integration", "Amazon API Gateway", "Lambda Integration", "API 요청을 Lambda로 전달", "Amazon API Gateway")
         add_component("api-lambda-permission", "AWS Lambda", "Resource Permission", "API Gateway의 Lambda 호출 허용", "AWS Lambda")
+    if any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")) and any(c.service == "AWS Secrets Manager" for c in components):
+        if not lambda_component:
+            lambda_component = BlueprintComponent(id="aws-lambda", service="AWS Lambda", resource_type="Function", role="Secret Rotation 실행")
+            components.append(lambda_component)
+        add_component("rotation-schedule", "Amazon EventBridge", "Scheduler", "Secret Rotation 주기 실행")
+        add_component("rotation-lambda-permission", "AWS Lambda", "Resource Permission", "Scheduler의 Rotation Lambda 호출 허용", "AWS Lambda")
+        add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "Rotation 감사·실패 모니터링")
+        add_component("cloudwatch-rotation-logs", "Amazon CloudWatch", "Log Group/Alarm", "Rotation 감사·실패 모니터링", "Amazon CloudWatch")
+    if any(x in text for x in ("cloudtrail", "접근 제어 감사", "감사 로그")):
+        add_component("cloudtrail-trail", "AWS CloudTrail", "Trail", "API 접근 감사 기록")
+        add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
+        add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -162,7 +177,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             elif not owner:
                 owner = next((m for m in modules if m.id == component.id or "iam" in m.title.lower()), None)
                 if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
-        elif component.id in {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-permission", "sns-publish-permission"}:
+        elif component.id in {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission"}:
             owner = next((m for m in modules if "lambda" in m.title.lower()), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id == "s3-event-notification":
@@ -177,16 +192,22 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         elif component.id == "kms-key-policy":
             owner = next((m for m in modules if m.title == "AWS KMS"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs"}:
+            target_title = "AWS CloudTrail" if component.id == "cloudtrail-trail" else "Amazon CloudWatch"
+            owner = next((m for m in modules if m.title == target_title), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id == "eventbridge-scan-rule":
             owner = next((m for m in modules if m.title == "Amazon EventBridge"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
     files = []
-    if "lambda_function.py" in text or "lambda" in text or "함수" in text:
+    if any(c.service == "AWS Lambda" for c in components) or "lambda_function.py" in text or "lambda" in text or "함수" in text:
         files.append(BlueprintFile(path="lambda_function.py", used_by_module=["aws-lambda"], dependencies=["Function", "Runtime", "Handler", "Execution Role"]))
     flows = []
     for left, right, action in re.findall(r"([A-Za-z0-9가-힣 ]+)\s*(?:→|->)\s*([A-Za-z0-9가-힣 ]+)(?:\s*[:：]\s*([^,\n]+))?", req.raw):
         flows.append(DataFlow(from_node=left.strip(), to_node=right.strip(), action=(action or "request/data flow").strip()))
-    if not flows and len(components) >= 2:
+    if any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")):
+        flows = [DataFlow(from_node="Amazon EventBridge Scheduler", to_node="AWS Lambda Rotation", action="Scheduled invocation"), DataFlow(from_node="AWS Lambda Rotation", to_node="AWS Secrets Manager", action="RotateSecret/GetSecretValue"), DataFlow(from_node="AWS Lambda Rotation", to_node="Amazon CloudWatch", action="Audit and failure logs")]
+    elif not flows and len(components) >= 2:
         flows = [DataFlow(from_node=components[i].service, to_node=components[i + 1].service, action="configured integration") for i in range(len(components) - 1)]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
