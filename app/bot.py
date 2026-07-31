@@ -272,6 +272,8 @@ def blueprint_embed(blueprint: AssignmentBlueprint) -> discord.Embed:
     embed.add_field(name="예정 모듈", value="\n\n".join(modules)[:1024] or "없음", inline=False)
     files = "\n".join(f"- {f.path} → {', '.join(f.used_by_module)}" for f in blueprint.provided_files) or "없음"
     embed.add_field(name="지급파일", value=files[:1024], inline=False)
+    difficulty = "어려움" if len(blueprint.components) >= 6 else "보통" if len(blueprint.components) >= 3 else "쉬움"
+    embed.add_field(name="예상 난이도", value=f"{difficulty} · 60분 내 구성·연결·동작 검증", inline=False)
     embed.add_field(name="주요 동작 검증", value="\n".join(f"- {c.get('description', c.get('type', '동작 검증'))}" for c in blueprint.behavior_checks)[:1024] or "end-to-end 동작 및 실패 경로 검증", inline=False)
     embed.set_footer(text="구성안 승인 후에만 실제 산출물을 생성합니다.")
     return embed

@@ -96,6 +96,19 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             if not any(component.service == service for component in components):
                 resource, role = {"Amazon ECR": ("Repository", "이미지 저장·검사"), "Amazon EventBridge": ("Rule", "이벤트 라우팅"), "Amazon Route 53": ("DNS", "DNS 장애 전환"), "AWS IAM": ("Policy/Role", "접근 제어")}.get(service, ("Resource", "아키텍처 구성요소"))
                 components.append(BlueprintComponent(id=re.sub(r"[^a-z0-9]+", "-", service.lower()).strip("-"), service=service, resource_type=resource, role=role))
+    # Difficulty revision may add a directly related module without changing the original topic.
+    # The additions are bounded to one or two supporting roles and are reviewed again.
+    if any(token in text for token in ("난이도를 높", "난이도 높", "보안·실패", "보강")):
+        existing_services = {component.service for component in components}
+        additions = []
+        if "Amazon CloudFront" in existing_services and "AWS WAF" not in existing_services: additions.append(("aws-waf", "AWS WAF", "Web ACL", "엣지 공격 차단"))
+        if "Amazon ECR" in existing_services:
+            if "Amazon EventBridge" not in existing_services: additions.append(("amazon-eventbridge", "Amazon EventBridge", "Rule", "취약점 이벤트 라우팅"))
+            if "AWS Lambda" not in existing_services: additions.append(("aws-lambda", "AWS Lambda", "Function", "취약 이미지 자동 격리"))
+        if "Amazon S3" in existing_services and "AWS Lambda" in existing_services and "AWS KMS" not in existing_services: additions.append(("aws-kms", "AWS KMS", "KMS Key", "민감 객체 암호화"))
+        for component_id, service, resource_type, role in additions:
+            components.append(BlueprintComponent(id=component_id, service=service, resource_type=resource_type, role=role))
+
     # Architecture closure: infer mandatory execution, event, permission and policy components
     # before showing the proposal. A primary service alone is never considered complete.
     def add_component(component_id, service, resource_type, role, module_service=None):
