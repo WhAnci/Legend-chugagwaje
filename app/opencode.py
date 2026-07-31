@@ -2,6 +2,7 @@ import asyncio, base64, json, logging, os, re, time
 import httpx
 from .models import TaskDraft, TaskRequest
 from .prompt import SYSTEM, make_prompt
+from .blueprint import AssignmentBlueprint, reviewer_prompt
 from .usage import record as record_usage
 
 class OpenCodeError(RuntimeError): pass
@@ -62,6 +63,32 @@ async def _api_model(req: TaskRequest, api_key: str, model_setting: str) -> Task
             if response.status_code not in {408, 429, 500, 502, 503, 504} or attempt >= retries: break
             await asyncio.sleep(5 * (attempt + 1))
     raise OpenCodeError(f"OpenCode Go API 오류 모델={model_setting}: {last_error}")
+
+async def review_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
+    """Ask OpenCode to review a Blueprint before it is shown for approval."""
+    api_key = os.getenv("OPENCODE_API_KEY", "").strip()
+    if not api_key: raise OpenCodeError("OpenCode API 키가 없어 Blueprint 검토를 수행할 수 없습니다.")
+    prompt = reviewer_prompt(blueprint) + "\n검토 결과는 JSON 배열만 반환하라. 문제가 없으면 []를 반환하라."
+    timeout = float(os.getenv("OPENCODE_REVIEW_TIMEOUT_SECONDS", "45"))
+    errors = []
+    for model_setting in _models():
+        model_id = model_setting.split("/", 1)[-1]
+        body = {"model": model_id, "messages": [{"role": "system", "content": "너는 AWS 과제 Blueprint Reviewer다."}, {"role": "user", "content": prompt}], "temperature": 0}
+        try:
+            url = os.getenv("OPENCODE_API_URL", "https://opencode.ai/zen/go/v1").rstrip("/") + "/chat/completions"
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, headers={"Authorization": f"Bearer {api_key}"}, json=body)
+            if response.status_code >= 400:
+                errors.append(f"{model_setting}: HTTP {response.status_code}"); continue
+            text = response.json()["choices"][0]["message"]["content"].strip()
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I)
+            start, end = text.find("["), text.rfind("]")
+            if start < 0 or end < start: raise ValueError("Reviewer JSON 배열이 없습니다")
+            result = json.loads(text[start:end + 1])
+            return [str(item) for item in result if str(item).strip()] if isinstance(result, list) else ["Reviewer 결과가 배열이 아닙니다."]
+        except Exception as exc:
+            errors.append(f"{model_setting}: {str(exc)[:200]}")
+    raise OpenCodeError("OpenCode Blueprint Reviewer 실패: " + " | ".join(errors[-3:]))
 
 async def generate(req: TaskRequest) -> TaskDraft:
     started = time.monotonic(); api_key = os.getenv("OPENCODE_API_KEY", "").strip(); models = _models()

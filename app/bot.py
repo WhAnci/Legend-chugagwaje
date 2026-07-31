@@ -16,6 +16,7 @@ from .topic_history import load as load_topic_history, add as remember_topics
 from .usage import summary as usage_summary, links as usage_links
 from .completeness import complete_assignment
 from .blueprint import AssignmentBlueprint, check_approved_modules, create_blueprint, validate_blueprint
+from .opencode import review_blueprint
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -328,8 +329,14 @@ class BlueprintApprovalView(discord.ui.View):
 async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
     blueprint = create_blueprint(TaskRequest(raw=raw))
     errors = validate_blueprint(blueprint)
+    if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true":
+        try:
+            await message.edit(content="🔍 OpenCode가 과제 구성안을 검토하고 있습니다...", embed=None, view=None)
+            errors.extend(await review_blueprint(blueprint))
+        except Exception as exc:
+            errors.append(f"OpenCode Blueprint 검토 실패: {str(exc)[:300]}")
     if errors:
-        await message.edit(content="❌ 내부 설계 검증에 실패했습니다. 구성안을 다시 설계합니다.", embed=None, view=None)
+        await message.edit(content="❌ 구성안 검토를 통과하지 못했습니다. PDF와 파일은 생성하지 않습니다.\n" + "\n".join(f"- {error}" for error in errors[:8]), embed=None, view=None)
         logger.warning("blueprint rejected: %s", errors)
         return
     pending_blueprints[message.id] = {"raw": raw, "blueprint": blueprint, "channel_id": message.channel.id, "owner_id": owner_id}
