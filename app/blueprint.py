@@ -51,6 +51,9 @@ SERVICE_HINTS = [
     ("Amazon SNS", ("sns", "topic", "알림"), "Topic", "알림 발행"),
     ("Amazon SQS", ("sqs", "queue", "큐"), "Queue", "메시지 버퍼"),
     ("Amazon API Gateway", ("api gateway",), "API", "요청 수집"),
+    ("Amazon ECR", ("ecr", "container registry", "컨테이너 이미지"), "Repository", "이미지 저장·검사"),
+    ("Amazon EventBridge", ("eventbridge", "이벤트 규칙"), "Rule", "이벤트 라우팅"),
+    ("AWS Network Firewall", ("network firewall",), "Firewall", "네트워크 보호"),
     ("Amazon Route 53", ("route 53", "route53", "failover", "dns"), "DNS", "DNS 장애 전환"),
     ("Amazon VPC", ("vpc", "subnet", "서브넷"), "VPC", "네트워크 기반"),
 ]
@@ -87,6 +90,13 @@ def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
         if not file.used_by_module: errors.append(f"지급파일 사용 module이 없습니다: {file.path}")
         if file.path.endswith("lambda_function.py") and not any(c.service == "AWS Lambda" for c in blueprint.components): errors.append("Lambda 지급파일이 있지만 Lambda component가 없습니다.")
     return errors
+
+def check_approved_modules(blueprint: AssignmentBlueprint, draft: TaskDraft) -> list[str]:
+    expected = {module.title.lower() for module in blueprint.logical_modules}
+    actual = {module.title.lower() for module in (draft.document.modules if draft.document else [])}
+    missing = expected - actual
+    extra = actual - expected
+    return ([f"승인된 module이 최종 문서에서 누락되었습니다: {sorted(missing)}"] if missing else []) + ([f"승인되지 않은 module이 최종 문서에 추가되었습니다: {sorted(extra)}"] if extra else [])
 
 def review_generated_draft(blueprint: AssignmentBlueprint, draft: TaskDraft) -> list[str]:
     errors = []

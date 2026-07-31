@@ -18,6 +18,7 @@ class TaskRequest(BaseModel):
     iac: str = "필요 시 선택"
     analysis: str = ""
     previous_draft: str = ""
+    approved_blueprint: str = ""
 
 class DeploymentFile(StructuredModel):
     path: str

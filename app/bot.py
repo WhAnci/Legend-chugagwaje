@@ -15,6 +15,7 @@ from .ui import TopicChoiceView
 from .topic_history import load as load_topic_history, add as remember_topics
 from .usage import summary as usage_summary, links as usage_links
 from .completeness import complete_assignment
+from .blueprint import AssignmentBlueprint, check_approved_modules, create_blueprint, validate_blueprint
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -39,6 +40,7 @@ class JobContext:
 
 active_jobs: dict[str, JobContext] = {}
 job_history: list[dict] = []
+pending_blueprints: dict[int, dict] = {}
 
 def has_authorized_role(member: discord.Member | discord.User) -> bool:
     return any(getattr(role, "id", None) == AUTHORIZED_ROLE_ID for role in getattr(member, "roles", []))
@@ -60,7 +62,7 @@ async def timed_phase(status: discord.Message, label: str, seconds: int):
         await status.edit(content=f"⏳ {label}\n진행 중... (남은 예상시간 {remain // 60}분 {remain % 60:02d}초)")
         await asyncio.sleep(min(60, remain))
 
-async def create_job(raw: str):
+async def create_job(raw: str, approved_blueprint: AssignmentBlueprint | None = None):
     logger.info("job request received: %s", raw[:160])
     service = "자동 선정"
     for candidate in ("EKS", "Kubernetes", "Cognito", "WebSocket", "AppSync", "WAF", "EventBridge", "CloudFront Functions", "Global Accelerator", "Transit Gateway", "PrivateLink", "ECR", "S3", "EC2", "ALB", "Lambda", "VPC", "RDS", "CloudFront", "DynamoDB", "ECS", "IAM"): 
@@ -70,7 +72,7 @@ async def create_job(raw: str):
     # 사용자가 리전을 명시하지 않으면 AI가 서비스 특성에 맞는 리전을 선택한다.
     # 기본값으로 서울 리전을 강제하지 않는다.
     region = m.group(1) if (m := re.search(r"(ap-[a-z-]+-\d+)", raw)) else ""
-    request = TaskRequest(raw=raw, service=service, difficulty=difficulty, duration_minutes=minutes, region=region)
+    request = TaskRequest(raw=raw, service=service, difficulty=difficulty, duration_minutes=minutes, region=region, approved_blueprint=approved_blueprint.model_dump_json() if approved_blueprint else "")
     # DeepSeek: 요구사항 분석과 산출물 제작을 함께 담당한다. Gemini는 최종 검토만 한다.
     logger.info("generation backend=%s service=%s region=%s", os.getenv("AGENT_BACKEND", "opencode"), service, region or "unset")
     last_errors = []
@@ -83,6 +85,10 @@ async def create_job(raw: str):
         current = request.model_copy(update={"raw": retry_raw, "previous_draft": ""})
         logger.info("generation attempt=%d started", _ + 1)
         draft = complete_assignment(raw, normalize(await generate(current)))
+        if approved_blueprint:
+            approved_errors = check_approved_modules(approved_blueprint, draft)
+            if approved_errors:
+                draft.notes = "BLUEPRINT_APPROVAL_ERRORS: " + " | ".join(approved_errors)
         logger.info("generation attempt=%d returned title=%s", _ + 1, draft.title)
         result = validate(draft)
         if result.ok:
@@ -117,7 +123,7 @@ async def notify_original(ctx: JobContext, content: str, pdf_path: Path | None =
     finally:
         ctx.notifying = False
 
-async def run_generation(status: discord.Message, raw: str, context: JobContext | None = None):
+async def run_generation(status: discord.Message, raw: str, context: JobContext | None = None, approved_blueprint: AssignmentBlueprint | None = None):
     started = time.monotonic()
     if context:
         context.task = asyncio.current_task()
@@ -127,7 +133,7 @@ async def run_generation(status: discord.Message, raw: str, context: JobContext 
         logger.info("job started")
         await status.edit(content="🧠 1/3 과제 구조·요구사항·채점 흐름을 검토하고 있습니다.\n예상 시간은 외부 AI 응답에 따라 변동됩니다.")
         if context: context.phase = "AI 생성 중"
-        task = asyncio.create_task(create_job(raw))
+        task = asyncio.create_task(create_job(raw, approved_blueprint))
         if context: context.worker_task = task
         while not task.done():
             done, _ = await asyncio.wait({task}, timeout=10)
@@ -254,6 +260,79 @@ def topics_embed(topics: list[dict]) -> discord.Embed:
 def topic_prompt(topic: dict) -> str:
     return json.dumps(topic, ensure_ascii=False)
 
+def blueprint_embed(blueprint: AssignmentBlueprint) -> discord.Embed:
+    embed = discord.Embed(title="과제 구성안 확인", description="아직 PDF·과제지·채점파일을 생성하지 않았습니다. 구성안을 검토한 뒤 승인하세요.", color=0x5865F2)
+    embed.add_field(name="과제명", value=blueprint.goal[:1024] or "AWS 추가과제", inline=False)
+    flow = "\n".join(f"{item.from_node} → {item.to_node} ({item.action})" for item in blueprint.data_flow) or "구성요소 기반 end-to-end 흐름"
+    embed.add_field(name="아키텍처 흐름", value=flow[:1024], inline=False)
+    modules = []
+    for index, module in enumerate(blueprint.logical_modules, 1):
+        component_names = [next((c.service for c in blueprint.components if c.id == cid), cid) for cid in module.component_ids]
+        modules.append(f"No {index}. {module.title}\n- 포함: {', '.join(component_names) or '구성요소 설계 필요'}")
+    embed.add_field(name="예정 모듈", value="\n\n".join(modules)[:1024] or "없음", inline=False)
+    files = "\n".join(f"- {f.path} → {', '.join(f.used_by_module)}" for f in blueprint.provided_files) or "없음"
+    embed.add_field(name="지급파일", value=files[:1024], inline=False)
+    embed.add_field(name="주요 동작 검증", value="\n".join(f"- {c.get('description', c.get('type', '동작 검증'))}" for c in blueprint.behavior_checks)[:1024] or "end-to-end 동작 및 실패 경로 검증", inline=False)
+    embed.set_footer(text="구성안 승인 후에만 실제 산출물을 생성합니다.")
+    return embed
+
+class BlueprintApprovalView(discord.ui.View):
+    def __init__(self, owner_id: int, message_id: int):
+        super().__init__(timeout=900)
+        self.owner_id = owner_id; self.message_id = message_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id or not has_authorized_role(interaction.user):
+            await interaction.response.send_message("구성안을 만든 사용자와 지정 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return False
+        return True
+
+    @discord.ui.button(label="구성안 승인", style=discord.ButtonStyle.success)
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pending = pending_blueprints.pop(self.message_id, None)
+        if not pending: await interaction.response.send_message("만료되었거나 이미 처리된 구성안입니다.", ephemeral=True); return
+        await interaction.response.defer()
+        await interaction.message.edit(content="✅ 구성안 승인됨\n🛠️ 승인된 Blueprint로 산출물을 생성합니다.", embed=None, view=None)
+        context = JobContext(job_id=uuid.uuid4().hex, channel_id=interaction.channel.id, message_id=interaction.message.id, user_id=interaction.user.id, source=interaction.message)
+        active_jobs[context.job_id] = context
+        await run_generation(interaction.message, pending["raw"], context, pending["blueprint"])
+
+    @discord.ui.button(label="모듈 수정", style=discord.ButtonStyle.secondary)
+    async def edit_modules(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("수정할 모듈을 멘션으로 보내세요. 예: `@봇 모듈 수정: Route 53을 별도 모듈로 분리`", ephemeral=True)
+
+    @discord.ui.button(label="난이도 높이기", style=discord.ButtonStyle.primary)
+    async def harder(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._revise(interaction, " 난이도를 높이고 보안·실패 경로·동작 검증을 보강한다.")
+
+    @discord.ui.button(label="난이도 낮추기", style=discord.ButtonStyle.secondary)
+    async def easier(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._revise(interaction, " 난이도를 낮추되 end-to-end 동작 검증은 유지한다.")
+
+    @discord.ui.button(label="주제 다시 생성", style=discord.ButtonStyle.danger)
+    async def regenerate(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pending = pending_blueprints.pop(self.message_id, None)
+        if pending:
+            await interaction.response.defer()
+            await interaction.message.edit(content="🔄 새 구성안을 준비합니다...", embed=None, view=None)
+            await show_blueprint(interaction.message, pending["raw"] + "\n이전 구성안과 다른 주제로 다시 설계", self.owner_id)
+        else: await interaction.response.send_message("만료된 구성안입니다.", ephemeral=True)
+
+    async def _revise(self, interaction, suffix):
+        pending = pending_blueprints.get(self.message_id)
+        if not pending: await interaction.response.send_message("만료된 구성안입니다.", ephemeral=True); return
+        await interaction.response.defer()
+        await show_blueprint(interaction.message, pending["raw"] + suffix, self.owner_id)
+
+async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
+    blueprint = create_blueprint(TaskRequest(raw=raw))
+    errors = validate_blueprint(blueprint)
+    if errors:
+        await message.edit(content="❌ 내부 설계 검증에 실패했습니다. 구성안을 다시 설계합니다.", embed=None, view=None)
+        logger.warning("blueprint rejected: %s", errors)
+        return
+    pending_blueprints[message.id] = {"raw": raw, "blueprint": blueprint, "channel_id": message.channel.id, "owner_id": owner_id}
+    await message.edit(content=None, embed=blueprint_embed(blueprint), view=BlueprintApprovalView(owner_id, message.id))
+
 async def choose_again(interaction: discord.Interaction, topic: dict | None, previous: list[dict] | None = None):
     if not has_authorized_role(interaction.user):
         await interaction.followup.send("권한이 없습니다.", ephemeral=True); return
@@ -265,12 +344,9 @@ async def choose_again(interaction: discord.Interaction, topic: dict | None, pre
             await interaction.message.edit(content=f"❌ 새 주제 생성 실패: `{str(exc)[:500]}`", view=None); return
         await interaction.message.edit(content=None, embed=topics_embed(topics), view=TopicChoiceView(topics, interaction.user.id, choose_again))
         return
-    await interaction.message.edit(content=f"⏳ 선택됨: **{topic.get('title', 'AWS 과제')}**\n과제 설계와 검증을 진행합니다.\n진행: 0/3 준비 중", embed=None, view=None)
+    await interaction.message.edit(content=f"🧠 선택됨: **{topic.get('title', 'AWS 과제')}**\n과제 구성안을 설계하고 있습니다.", embed=None, view=None)
     status = await interaction.channel.fetch_message(interaction.message.id)
-    context = JobContext(job_id=uuid.uuid4().hex, channel_id=status.channel.id, message_id=status.id, user_id=interaction.user.id, source=status)
-    active_jobs[context.job_id] = context
-    logger.info("job context saved job=%s channel=%s message=%s user=%s", context.job_id, context.channel_id, context.message_id, context.user_id)
-    await run_generation(status, topic_prompt(topic), context)
+    await show_blueprint(status, topic_prompt(topic), interaction.user.id)
 
 @bot.tree.command(name="usage", description="AI API 사용량을 확인합니다.")
 async def usage_command(interaction: discord.Interaction):
@@ -298,13 +374,9 @@ async def add_task_command(interaction: discord.Interaction, requirements: str |
         except Exception as exc:
             await interaction.followup.send(f"❌ AI 주제 생성 실패: `{str(exc)[:800]}`")
         return
-    status = await interaction.followup.send("⏳ 과제 제작을 시작했습니다. 과제 설계와 검증을 진행합니다.\n진행: 0/3 준비 중", wait=True)
-    # Followup webhook 토큰은 장시간 작업 중 만료될 수 있으므로 일반 채널 메시지로 다시 가져온다.
+    status = await interaction.followup.send("🧠 과제 구성안을 설계하고 검증합니다. 아직 파일은 생성하지 않습니다.", wait=True)
     status = await interaction.channel.fetch_message(status.id)
-    context = JobContext(job_id=uuid.uuid4().hex, channel_id=status.channel.id, message_id=status.id, user_id=interaction.user.id, source=status)
-    active_jobs[context.job_id] = context
-    logger.info("job context saved job=%s channel=%s message=%s user=%s", context.job_id, context.channel_id, context.message_id, context.user_id)
-    await run_generation(status, raw, context)
+    await show_blueprint(status, raw, interaction.user.id)
 
 @bot.event
 async def on_ready():
@@ -332,6 +404,13 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
     raw = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip() or "추가과제"
+    pending = next((item for item in pending_blueprints.values() if item.get("channel_id") == message.channel.id and item.get("owner_id") == message.author.id), None)
+    if pending and re.search(r"모듈|난이도|구성안|수정", raw):
+        for pending_id, pending_item in list(pending_blueprints.items()):
+            if pending_item is pending: pending_blueprints.pop(pending_id, None)
+        status = await message.channel.send("🧠 승인 전 구성안을 수정하고 다시 검증합니다.")
+        await show_blueprint(status, pending["raw"] + "\n사용자 수정 요청: " + raw, message.author.id)
+        return
     generic = raw.strip() in {"과제", "과제지", "추가과제", "추가 과제"} or (re.search(r"(?:추가)?과제\s*(?:생성|만들)|주제.*자동|알아서", raw, re.I) and not re.search(r"S3|EC2|ALB|Lambda|VPC|RDS|CloudFront|DynamoDB|ECS|IAM|Cognito|WebSocket|AppSync|WAF|Global.?Accelerator|PrivateLink|ECR|EKS|Kubernetes|Route.?53|Transit|EventBridge|Step.?Functions|SQS", raw, re.I))
     if generic:
         try:
@@ -341,12 +420,9 @@ async def on_message(message: discord.Message):
             await message.channel.send(f"❌ AI 주제 생성 실패: `{str(exc)[:800]}`"); return
         await message.channel.send(embed=topics_embed(topics), view=TopicChoiceView(topics, message.author.id, choose_again))
         return
-    job_id = uuid.uuid4().hex
-    context = JobContext(job_id=job_id, channel_id=message.channel.id, message_id=message.id, user_id=message.author.id, source=message)
-    active_jobs[job_id] = context
-    logger.info("job context saved job=%s channel=%s message=%s user=%s", job_id, context.channel_id, context.message_id, context.user_id)
-    status = await message.channel.send("⏳ 과제 제작을 시작했습니다. 과제 설계와 검증을 진행합니다.\n진행: 0/3 준비 중")
-    await run_generation(status, raw, context)
+    # 직접 요청도 먼저 Blueprint 승인 단계로 보낸다.
+    status = await message.channel.send("🧠 과제 구성안을 설계하고 검증합니다. 아직 파일은 생성하지 않습니다.")
+    await show_blueprint(status, raw, message.author.id)
     await bot.process_commands(message)
 
 def run():

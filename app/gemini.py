@@ -8,7 +8,7 @@ class GeminiError(RuntimeError): pass
 
 logger = logging.getLogger("aws-task-gemini")
 
-async def _call(prompt: str, *, json_mode: bool = True, model_override: str | None = None) -> str:
+async def _call(prompt: str, *, json_mode: bool = True, model_override: str | None = None, timeout: float | None = None) -> str:
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         raise GeminiError("GEMINI_API_KEY가 설정되지 않았습니다.")
@@ -19,7 +19,8 @@ async def _call(prompt: str, *, json_mode: bool = True, model_override: str | No
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": config}
     started = time.monotonic()
     logger.info("Gemini request start model=%s", model)
-    async with httpx.AsyncClient(timeout=float(os.getenv("GEMINI_TIMEOUT_SECONDS", "90"))) as client:
+    request_timeout = timeout if timeout is not None else float(os.getenv("GEMINI_TIMEOUT_SECONDS", "90"))
+    async with httpx.AsyncClient(timeout=request_timeout) as client:
         response = await client.post(url, params={"key": key}, json=body)
     logger.info("Gemini response status=%s elapsed=%ss", response.status_code, int(time.monotonic() - started))
     if response.status_code >= 400:
@@ -93,9 +94,9 @@ AI, IoT, 게임, IAM Identity Center는 제외한다. 보조 서비스는 최대
 사용자 요청:
 {raw}
 
-먼저 내부적으로 최소 10개를 만든 뒤 구조적 중복을 제거하고 가장 차별화된 3개만 선택하라. JSON 배열만 반환하라. 각 원소는 title, problemType, taskType, primaryService, supportingServices, scenario, coreWork 배열, behaviorValidation, difference 필드를 가져야 한다."""
+내부적으로 간단히 비교한 뒤 가장 차별화된 3개만 선택하라. 장황한 설명 없이 JSON 배열만 반환하라. 각 원소는 title, problemType, taskType, primaryService, supportingServices, scenario, coreWork 배열, behaviorValidation, difference 필드를 가져야 한다."""
     try:
-        items = _array(await _call(prompt))
+        items = _array(await _call(prompt, timeout=float(os.getenv("GEMINI_TOPIC_TIMEOUT_SECONDS", "35"))) )
         if isinstance(items, list) and len(items) >= 3 and all(isinstance(x, dict) for x in items[:3]):
             values = []
             for item in items[:3]:

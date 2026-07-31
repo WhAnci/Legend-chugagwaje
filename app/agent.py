@@ -1,12 +1,12 @@
 import logging, os, json
 from .models import TaskDraft, TaskRequest
-from .blueprint import create_blueprint, validate_blueprint, review_generated_draft, blueprint_prompt
+from .blueprint import AssignmentBlueprint, create_blueprint, validate_blueprint, review_generated_draft, blueprint_prompt
 
 logger = logging.getLogger("aws-task-agent")
 
 async def generate(req: TaskRequest) -> TaskDraft:
     # AssignmentBlueprint is designed and reviewed before any assignment JSON/PDF generation.
-    blueprint = create_blueprint(req)
+    blueprint = AssignmentBlueprint.model_validate_json(req.approved_blueprint) if req.approved_blueprint else create_blueprint(req)
     blueprint_errors = validate_blueprint(blueprint)
     if blueprint_errors:
         raise RuntimeError("Blueprint 검증 실패: " + "; ".join(blueprint_errors))

@@ -80,6 +80,13 @@ async def generate(req: TaskRequest) -> TaskDraft:
                 # failover_exhausted는 OpenCode provider 자체가 이미 모든 upstream을
                 # 시도한 상태이므로 같은 요청을 즉시 반복하지 않는다.
                 if "failover_exhausted" in response.text:
+                    # 리전/인증 오류가 아니라 upstream 추론 일시 장애일 수 있다.
+                    # 즉시 fallback하지 않고 짧은 backoff 후 새 요청을 한 번 더 시도한다.
+                    if response.status_code == 503 and attempt < retries:
+                        delay = float(os.getenv("OPENCODE_FAILOVER_RETRY_DELAY_SECONDS", "20"))
+                        logger.warning("OpenCode provider failover exhausted; retrying after %.0fs", delay)
+                        await asyncio.sleep(delay)
+                        continue
                     logger.warning("OpenCode provider failover exhausted; switching to fallback")
                     break
                 if response.status_code not in {408, 429, 500, 502, 503, 504} or attempt >= retries:
