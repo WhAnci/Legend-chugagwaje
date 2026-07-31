@@ -27,7 +27,10 @@ def validate(draft: TaskDraft) -> ValidationResult:
         numbers = [m.number for m in modules]
         if numbers != list(range(1, len(numbers) + 1)): errors.append("module 번호가 1부터 연속되지 않습니다.")
         seen_services = set()
+        strict_modules = bool(draft.checks)
         for module in modules:
+            if strict_modules and (not module.description.strip() or not (module.fixed_specs or module.specs)):
+                errors.append(f"module에 description 또는 fixedSpec이 없습니다: {module.title}")
             expected_service = official_service(module.service or module.title)
             if expected_service != module.title and module.title not in {"Security Group", "IAM Role"}:
                 errors.append(f"module.service와 title이 일치하지 않습니다: {module.service} / {module.title}")
@@ -40,6 +43,16 @@ def validate(draft: TaskDraft) -> ValidationResult:
                 errors.append("DynamoDB module에 Lambda 설정이 섞여 있습니다.")
             if "s3" in service_key and re.search(r"runtime|handler|function name", labels):
                 errors.append("S3 module에 Lambda 설정이 섞여 있습니다.")
+            if strict_modules:
+                forbidden = {
+                    "sqs": r"runtime|handler|function name",
+                    "dynamodb": r"runtime|handler|function name",
+                    "sns": r"queue name",
+                    "lambda": r"billing mode",
+                    "api gateway": r"partition key",
+                }
+                for key, pattern in forbidden.items():
+                    if key in service_key and re.search(pattern, labels): errors.append(f"{module.title} module에 다른 서비스 설정이 섞여 있습니다.")
             detected = detect(f"{module.title} {module.service} {module.resource_type}".lower())
             if len(detected) >= 2:
                 errors.append(f"여러 핵심 서비스가 하나의 module에 합쳐져 있습니다: {module.title}")

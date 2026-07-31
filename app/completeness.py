@@ -19,6 +19,22 @@ printf 'Hello from %s\\n' "$hostname_value" > /usr/share/nginx/html/index.html
 printf 'OK\\n' > /usr/share/nginx/html/health
 systemctl enable --now nginx
 '''
+SECRET_PROFILE = [
+    ("Amazon VPC", "VPC", "인터넷 경로 없는 프라이빗 네트워크", "Internet Gateway와 NAT Gateway 없이 두 AZ의 프라이빗 서브넷을 구성합니다.", [("VPC Name", "secure-config-vpc"), ("Private Subnet Names", ["secure-private-a", "secure-private-c"]), ("Required Tag", "Project=SecureConfig")]),
+    ("AWS Secrets Manager", "Secret", "애플리케이션 시크릿", "Lambda가 지정된 시크릿을 조회하되 원문은 외부 응답과 로그에 노출하지 않습니다.", [("Secret Name", "app/prod/db-credential")]),
+    ("Amazon VPC Endpoint", "Interface Endpoint", "Secrets Manager Interface Endpoint", "격리된 Lambda가 인터넷을 통하지 않고 Secrets Manager API에 접근합니다.", [("Endpoint Service", "com.amazonaws.ap-northeast-2.secretsmanager"), ("Endpoint Type", "Interface"), ("Private DNS", "Enabled"), ("Required Port", "TCP 443")]),
+    ("AWS Lambda", "Function", "Lambda 시크릿 조회 함수", "두 프라이빗 서브넷에서 실행되어 비민감 메타데이터만 반환합니다.", [("Function Name", "secure-config-loader"), ("Runtime", "Python 3.11"), ("Handler", "lambda_function.lambda_handler"), ("Environment Variable", "SECRET_NAME"), ("Provided File", "lambda_function.py")]),
+    ("IAM 및 접근 제어", "IAM/SecurityGroup", "최소 권한 및 접근 제어", "Lambda 역할과 Endpoint 보안 그룹을 최소 권한으로 제한합니다.", [("Role Name", "secure-config-loader-role"), ("Allowed Action", "secretsmanager:GetSecretValue"), ("Lambda Security Group", "secure-lambda-sg"), ("Endpoint Security Group", "secure-endpoint-sg"), ("Endpoint Port", "TCP 443")]),
+]
+SECRET_LAMBDA = '''import json, os, boto3
+
+def lambda_handler(event, context):
+    try:
+        result = boto3.client("secretsmanager").get_secret_value(SecretId=os.environ["SECRET_NAME"])
+        return {"statusCode": 200, "body": json.dumps({"retrieved": True, "versionId": result.get("VersionId", "")})}
+    except Exception as exc:
+        return {"statusCode": 500, "body": json.dumps({"retrieved": False, "error": type(exc).__name__})}
+'''
 EVENT_PROFILE = [
     ("Amazon API Gateway", "API", "HTTP 요청을 SQS로 전달하는 API Gateway 엔드포인트입니다.", [("API Name", "event-api"), ("Protocol", "HTTP"), ("Resource Path", "/events"), ("Method", "POST"), ("Integration Type", "SQS"), ("Target Queue", "event-queue")]),
     ("Amazon SQS", "Queue", "수신 이벤트를 비동기로 버퍼링하는 SQS 큐입니다.", [("Queue Name", "event-queue"), ("Queue Type", "Standard"), ("Visibility Timeout", "30"), ("Message Retention Period", "345600")]),
@@ -28,6 +44,24 @@ EVENT_PROFILE = [
 ]
 
 def _has(text, word): return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text.lower()) is not None
+def _secret_requested(raw):
+    text = raw.lower()
+    return "lambda" in text and "secrets manager" in text and ("vpc" in text or "interface endpoint" in text)
+
+def _complete_secret_bundle(raw, draft):
+    data = draft.model_dump(mode="json"); document = data.get("document") or {}
+    document["modules"] = [{"service": service, "resourceType": resource_type, "title": service, "description": description, "fixedSpecs": [{"label": label, "value": value} for label, value in specs]} for service, resource_type, _role, description, specs in SECRET_PROFILE]
+    document["overview"] = "인터넷 경로가 없는 프라이빗 네트워크의 Lambda가 Secrets Manager Interface VPC Endpoint를 통해 시크릿을 조회하는 보안 구성을 검증합니다."
+    document["architecture"] = "Private Lambda → Interface VPC Endpoint → AWS Secrets Manager"
+    document["requirements"] = list(dict.fromkeys((document.get("requirements") or []) + ["Internet Gateway와 NAT Gateway를 사용하지 않는 격리 네트워크", "시크릿 원문 비노출", "Endpoint를 통한 실제 조회 동작"]))
+    data["document"] = document
+    files = data.setdefault("deployment_files", [])
+    if not any(isinstance(item, dict) and item.get("path") == "lambda_function.py" for item in files): files.append({"path": "lambda_function.py", "content": SECRET_LAMBDA})
+    provided = data.get("provided_files") or []
+    if not any(isinstance(item, dict) and item.get("name") == "lambda_function.py" for item in provided): provided.append({"name": "lambda_function.py", "description": "Secrets Manager 조회 및 비민감 결과 반환 Lambda 코드"})
+    data["provided_files"] = provided
+    return TaskDraft.model_validate(data)
+
 def _event_requested(raw):
     text = raw.lower()
     return all(word in text for word in ("api gateway", "sqs", "lambda", "dynamodb", "sns"))
@@ -51,6 +85,7 @@ def _complete_event_bundle(raw, draft):
     return TaskDraft.model_validate(data)
 
 def complete_assignment(raw: str, draft: TaskDraft) -> TaskDraft:
+    if _secret_requested(raw): return _complete_secret_bundle(raw, draft)
     if _event_requested(raw): return _complete_event_bundle(raw, draft)
     if not (_has(raw, "vpc") and _has(raw, "ec2") and (_has(raw, "alb") or _has(raw, "elb"))): return draft
     data = draft.model_dump(mode="json"); document = data.get("document") or {}; modules = document.setdefault("modules", [])

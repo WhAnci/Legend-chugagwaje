@@ -3,13 +3,13 @@ import json
 import re
 
 OFFICIAL_NAMES = {
-    "api gateway": "Amazon API Gateway", "api gateway websocket": "Amazon API Gateway", "sqs": "Amazon SQS", "lambda": "AWS Lambda", "dynamodb": "Amazon DynamoDB", "s3": "Amazon S3", "cloudfront": "Amazon CloudFront", "cloudfront functions": "CloudFront Functions", "aws waf": "AWS WAF", "waf": "AWS WAF", "ecs": "Amazon ECS", "ecr": "Amazon ECR", "ec2": "Amazon EC2", "alb": "Application Load Balancer", "eventbridge": "Amazon EventBridge", "eventbridge pipes": "Amazon EventBridge Pipes", "step functions": "AWS Step Functions", "cognito": "Amazon Cognito", "cloudwatch": "Amazon CloudWatch", "rds": "Amazon RDS", "vpc": "Amazon VPC", "route 53": "Amazon Route 53", "route53": "Amazon Route 53", "backup": "AWS Backup", "kms": "AWS KMS", "ssm": "AWS Systems Manager", "vpc lattice": "Amazon VPC Lattice"
+    "api gateway websocket": "Amazon API Gateway", "eventbridge pipes": "Amazon EventBridge Pipes", "cloudfront functions": "CloudFront Functions", "vpc endpoint": "Amazon VPC Endpoint", "secrets manager": "AWS Secrets Manager", "step functions": "AWS Step Functions", "application load balancer": "Application Load Balancer", "route 53": "Amazon Route 53", "vpc lattice": "Amazon VPC Lattice", "cloudwatch": "Amazon CloudWatch", "cloudfront": "Amazon CloudFront", "dynamodb": "Amazon DynamoDB", "eventbridge": "Amazon EventBridge", "cognito": "Amazon Cognito", "backup": "AWS Backup", "lambda": "AWS Lambda", "dynamodb": "Amazon DynamoDB", "sqs": "Amazon SQS", "sns": "Amazon SNS", "waf": "AWS WAF", "ecs": "Amazon ECS", "ecr": "Amazon ECR", "ec2": "Amazon EC2", "alb": "Application Load Balancer", "rds": "Amazon RDS", "vpc": "Amazon VPC", "s3": "Amazon S3", "kms": "AWS KMS", "ssm": "AWS Systems Manager", "route53": "Amazon Route 53"
 }
 
 def official_service(value: str) -> str:
     text = str(value or "").lower()
     for key, official in sorted(OFFICIAL_NAMES.items(), key=lambda item: len(item[0]), reverse=True):
-        if key in text: return official
+        if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", text): return official
     return str(value or "").strip()
 
 CATALOG = [
