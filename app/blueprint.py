@@ -172,14 +172,26 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("network-firewall-rule-group", "AWS Network Firewall", "Stateful Rule Group", "도메인/트래픽 차단 규칙", "AWS Network Firewall")
         add_component("network-firewall-policy", "AWS Network Firewall", "Firewall Policy", "Rule Group 정책 연결", "AWS Network Firewall")
         add_component("network-firewall-endpoint", "AWS Network Firewall", "Firewall Endpoint", "전용 서브넷 방화벽 엔드포인트", "AWS Network Firewall")
+        add_component("network-firewall-subnet-mapping", "AWS Network Firewall", "SubnetMapping", "방화벽 전용 서브넷 연결", "AWS Network Firewall")
+        add_component("network-firewall-logging", "AWS Network Firewall", "LoggingConfiguration", "Alert/Flow 로그 전달", "AWS Network Firewall")
         add_component("vpc-routing", "Amazon VPC", "Route Table", "대칭 방화벽 경로", "Amazon VPC")
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group", "Network Firewall Alert/Flow 로그")
+        if any(x in text for x in ("ec2", "웹 서버", "인스턴스")):
+            add_component("amazon-ec2", "Amazon EC2", "Instance", "보호 대상 워크로드")
+            add_component("ec2-subnet", "Amazon EC2", "Subnet", "EC2 배치 서브넷", "Amazon EC2")
+            add_component("ec2-security-group", "Amazon EC2", "Security Group", "EC2 접근 제어", "Amazon EC2")
+            add_component("ec2-instance-profile", "AWS IAM", "Instance Profile", "EC2 실행 권한", "Amazon EC2")
+            add_component("ec2-user-data", "Amazon EC2", "User Data", "검증용 Client/트래픽 생성", "Amazon EC2")
+        if any(x in text for x in ("dynamodb", "dynamo db", "내부 db", "데이터베이스")):
+            add_component("amazon-dynamodb", "Amazon DynamoDB", "Table", "보호 대상 데이터 저장")
+            add_component("dynamodb-vpc-endpoint", "Amazon VPC Endpoint", "Gateway Endpoint", "격리 경로의 DynamoDB 접근", "Amazon VPC")
+            add_component("dynamodb-access-policy", "AWS IAM", "IAM Policy", "DynamoDB 접근 최소 권한", "Amazon EC2")
     if any(x in text for x in ("cloudtrail", "접근 제어 감사", "감사 로그")):
         add_component("cloudtrail-trail", "AWS CloudTrail", "Trail", "API 접근 감사 기록")
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
         add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -206,6 +218,15 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id == "kms-key-policy":
             owner = next((m for m in modules if m.title == "AWS KMS"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"network-firewall-subnet-mapping", "network-firewall-logging"}:
+            owner = next((m for m in modules if m.title == "AWS Network Firewall"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data"}:
+            owner = next((m for m in modules if m.title == "Amazon EC2"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"dynamodb-vpc-endpoint", "dynamodb-access-policy"}:
+            owner = next((m for m in modules if m.title == "Amazon VPC" or m.title == "Amazon EC2"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id == "sqs-event-source-mapping":
             owner = next((m for m in modules if m.title == "AWS Lambda"), None)
@@ -247,12 +268,16 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "Amazon EventBridge" in services: fixed_specs += [{"moduleId": "amazon-eventbridge", "field": field} for field in ("Schedule Expression", "Timezone", "Target ARN", "Scheduler Execution Role")]
     if "AWS KMS" in services: fixed_specs += [{"moduleId": "aws-kms", "field": field} for field in ("Key Alias", "Key Policy", "Encryption Target")]
     if "AWS Secrets Manager" in services: fixed_specs.append({"moduleId": "aws-secrets-manager", "field": "Secret Name/ARN"})
+    if "AWS Network Firewall" in services: fixed_specs += [{"moduleId": "aws-network-firewall", "field": field} for field in ("FirewallPolicy", "Stateful RuleGroup", "Firewall Subnet", "SubnetMapping", "LoggingConfiguration", "Route Table/Endpoint")]
+    if "Amazon EC2" in services: fixed_specs += [{"moduleId": "amazon-ec2", "field": field} for field in ("Subnet", "Security Group", "Instance Profile", "User Data")]
+    if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Partition Key", "DynamoDB Access Policy")]
     if "AWS IAM" in services or "AWS Lambda" in services: fixed_specs.append({"moduleId": "aws-lambda", "field": "Least-Privilege IAM Actions"})
     if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("SQS Queue URL/ARN Environment Variable", "AWS_REGION Environment Variable", "Event Source Mapping", "SQS Receive/Delete Permissions", "DLQ/RedrivePolicy")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Idempotency Key", "Status Field", "TTL", "ConditionalCheck Permission")]
     dependencies = [{"from": flow.from_node, "to": flow.to_node, "action": flow.action} for flow in flows]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
+    if any(c.service == "AWS Network Firewall" for c in components): behavior_checks.append({"type": "network_behavior", "description": "EC2에서 허용 도메인과 차단 도메인으로 실제 트래픽을 전송하고 Firewall Endpoint 경유·허용/차단·Alert 로그를 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
     goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())
     return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, fixed_specs=fixed_specs, dependencies=dependencies, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
