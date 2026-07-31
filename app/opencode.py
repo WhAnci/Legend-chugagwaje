@@ -98,7 +98,10 @@ async def generate(req: TaskRequest) -> TaskDraft:
         for model in models:
             try: return await _api_model(req, api_key, model)
             except OpenCodeError as exc:
-                errors.append(str(exc)); logger.warning("OpenCode model unavailable; trying next model=%s", model)
+                error_text = str(exc)
+                errors.append(error_text); logger.warning("OpenCode model unavailable; trying next model=%s", model)
+                if "read timeout" in error_text.lower() and os.getenv("OPENCODE_MODEL_FALLBACK_ON_TIMEOUT", "false").lower() != "true":
+                    break
         raise OpenCodeError(f"OpenCode 모델을 모두 사용할 수 없습니다(경과 {int(time.monotonic()-started)}s): " + " | ".join(errors[-3:]))
 
     logger.info("using OpenCode server mode elapsed=%ss", int(time.monotonic() - started))

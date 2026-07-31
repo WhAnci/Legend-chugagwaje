@@ -56,6 +56,7 @@ SERVICE_ALIASES = {
     "Amazon SNS": ("sns", "topic", "subscription", "publish"),
     "AWS KMS": ("kms", "key policy", "customer managed key", "sse-kms"),
     "AWS CloudTrail": ("cloudtrail", "감사 로그", "접근 제어 감사"),
+    "AWS Network Firewall": ("network firewall", "firewall policy", "stateful rule group", "firewall endpoint"),
     "AWS Config": ("aws config", "config rule", "구성 감사"),
     "AWS Secrets Manager": ("secrets manager", "secret name", "getsecretvalue"),
     "Amazon CloudWatch": ("cloudwatch", "log group", "alarm", "metric"),
@@ -84,6 +85,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     try: request_object = json.loads(req.raw) if req.raw.strip().startswith("{") else {}
     except Exception: request_object = {}
     text = f"{req.raw} {req.service} {req.analysis}".lower()
+    # Reviewer 오류는 사용자 요구 서비스가 아니므로 phantom module을 만들지 않는다.
+    text = text.split("blueprint 자동 수정 지시", 1)[0]
     components = []
     for service, hints, resource, role in SERVICE_HINTS:
         if any((re.search(rf"(?<![a-z0-9]){re.escape(hint.lower())}(?![a-z0-9])", text) if re.fullmatch(r"[a-z0-9 -]+", hint.lower()) else hint.lower() in text) for hint in hints):
@@ -159,12 +162,19 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("rotation-lambda-permission", "AWS Lambda", "Resource Permission", "Scheduler의 Rotation Lambda 호출 허용", "AWS Lambda")
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "Rotation 감사·실패 모니터링")
         add_component("cloudwatch-rotation-logs", "Amazon CloudWatch", "Log Group/Alarm", "Rotation 감사·실패 모니터링", "Amazon CloudWatch")
+    if any(x in text for x in ("network firewall", "firewall policy", "stateful rule group", "firewall endpoint")):
+        add_component("amazon-vpc", "Amazon VPC", "VPC", "방화벽 전용 서브넷과 네트워크 기반")
+        add_component("network-firewall-rule-group", "AWS Network Firewall", "Stateful Rule Group", "도메인/트래픽 차단 규칙", "AWS Network Firewall")
+        add_component("network-firewall-policy", "AWS Network Firewall", "Firewall Policy", "Rule Group 정책 연결", "AWS Network Firewall")
+        add_component("network-firewall-endpoint", "AWS Network Firewall", "Firewall Endpoint", "전용 서브넷 방화벽 엔드포인트", "AWS Network Firewall")
+        add_component("vpc-routing", "Amazon VPC", "Route Table", "대칭 방화벽 경로", "Amazon VPC")
+        add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group", "Network Firewall Alert/Flow 로그")
     if any(x in text for x in ("cloudtrail", "접근 제어 감사", "감사 로그")):
         add_component("cloudtrail-trail", "AWS CloudTrail", "Trail", "API 접근 감사 기록")
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
         add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -191,6 +201,12 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id == "kms-key-policy":
             owner = next((m for m in modules if m.title == "AWS KMS"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint"}:
+            owner = next((m for m in modules if m.title == "AWS Network Firewall"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "vpc-routing":
+            owner = next((m for m in modules if m.title == "Amazon VPC"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id in {"cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs"}:
             target_title = "AWS CloudTrail" if component.id == "cloudtrail-trail" else "Amazon CloudWatch"
