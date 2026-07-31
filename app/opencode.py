@@ -87,7 +87,7 @@ async def review_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
             result = json.loads(text[start:end + 1])
             return [str(item) for item in result if str(item).strip()] if isinstance(result, list) else ["Reviewer 결과가 배열이 아닙니다."]
         except Exception as exc:
-            errors.append(f"{model_setting}: {str(exc)[:200]}")
+            errors.append(f"{model_setting}: {repr(exc)[:200]}")
     raise OpenCodeError("OpenCode Blueprint Reviewer 실패: " + " | ".join(errors[-3:]))
 
 async def generate(req: TaskRequest) -> TaskDraft:

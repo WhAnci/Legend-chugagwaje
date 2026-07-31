@@ -209,11 +209,19 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         flows = [DataFlow(from_node="Amazon EventBridge Scheduler", to_node="AWS Lambda Rotation", action="Scheduled invocation"), DataFlow(from_node="AWS Lambda Rotation", to_node="AWS Secrets Manager", action="RotateSecret/GetSecretValue"), DataFlow(from_node="AWS Lambda Rotation", to_node="Amazon CloudWatch", action="Audit and failure logs")]
     elif not flows and len(components) >= 2:
         flows = [DataFlow(from_node=components[i].service, to_node=components[i + 1].service, action="configured integration") for i in range(len(components) - 1)]
+    fixed_specs = []
+    services = {c.service for c in components}
+    if "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("Function Name", "Runtime", "Handler", "Code/Provided File", "Execution Role")]
+    if "Amazon EventBridge" in services: fixed_specs += [{"moduleId": "amazon-eventbridge", "field": field} for field in ("Schedule Expression", "Timezone", "Target ARN", "Scheduler Execution Role")]
+    if "AWS KMS" in services: fixed_specs += [{"moduleId": "aws-kms", "field": field} for field in ("Key Alias", "Key Policy", "Encryption Target")]
+    if "AWS Secrets Manager" in services: fixed_specs.append({"moduleId": "aws-secrets-manager", "field": "Secret Name/ARN"})
+    if "AWS IAM" in services or "AWS Lambda" in services: fixed_specs.append({"moduleId": "aws-lambda", "field": "Least-Privilege IAM Actions"})
+    dependencies = [{"from": flow.from_node, "to": flow.to_node, "action": flow.action} for flow in flows]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
     goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())
-    return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
+    return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, fixed_specs=fixed_specs, dependencies=dependencies, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
 
 def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     errors = []

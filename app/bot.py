@@ -349,7 +349,8 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
         logger.warning("blueprint revision=%d requested: %s", revision + 1, errors[:5])
         working_raw += "\n\nBlueprint 자동 수정 지시:\n" + json.dumps(errors, ensure_ascii=False)
     if errors:
-        await message.edit(content="❌ 구성안 자동 보정 후에도 검토를 통과하지 못했습니다. PDF와 파일은 생성하지 않습니다.\n" + "\n".join(f"- {error}" for error in errors[:8]), embed=None, view=None)
+        failure_text = "❌ 구성안 자동 보정 후에도 검토를 통과하지 못했습니다. PDF와 파일은 생성하지 않습니다.\n" + "\n".join(f"- {str(error)[:240]}" for error in errors[:6])
+        await message.edit(content=failure_text[:1950], embed=None, view=None)
         logger.warning("blueprint rejected after revisions: %s", errors)
         return
     # 사용자 확인 버튼 없이, OpenCode Reviewer를 통과한 Blueprint를 즉시 승인한다.
