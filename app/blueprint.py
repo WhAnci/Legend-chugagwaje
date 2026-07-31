@@ -151,6 +151,11 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if lambda_component and any(x in text for x in ("sns", "publish", "알림")):
         add_component("sns-topic", "Amazon SNS", "Topic", "Lambda 결과 알림")
         add_component("sns-publish-permission", "AWS IAM", "IAM Policy", "Lambda SNS Publish 권한", "AWS Lambda")
+    if any(c.service == "Amazon SQS" for c in components) and lambda_component:
+        add_component("sqs-event-source-mapping", "AWS Lambda", "Event Source Mapping", "SQS 메시지를 Lambda로 전달", "AWS Lambda")
+        add_component("sqs-dlq", "Amazon SQS", "Dead Letter Queue/RedrivePolicy", "실패 메시지 재처리", "Amazon SQS")
+    if any(c.service == "Amazon SQS" for c in components) and any(c.service == "Amazon DynamoDB" for c in components):
+        add_component("dynamodb-idempotency-key", "Amazon DynamoDB", "Idempotency Table/TTL", "중복 이벤트 처리 상태", "Amazon DynamoDB")
     if any(x in text for x in ("api gateway",)) and lambda_component:
         add_component("api-lambda-integration", "Amazon API Gateway", "Lambda Integration", "API 요청을 Lambda로 전달", "Amazon API Gateway")
         add_component("api-lambda-permission", "AWS Lambda", "Resource Permission", "API Gateway의 Lambda 호출 허용", "AWS Lambda")
@@ -174,7 +179,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
         add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -202,6 +207,15 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         elif component.id == "kms-key-policy":
             owner = next((m for m in modules if m.title == "AWS KMS"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "sqs-event-source-mapping":
+            owner = next((m for m in modules if m.title == "AWS Lambda"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"sqs-dlq"}:
+            owner = next((m for m in modules if m.title == "Amazon SQS"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "dynamodb-idempotency-key":
+            owner = next((m for m in modules if m.title == "Amazon DynamoDB"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id in {"network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint"}:
             owner = next((m for m in modules if m.title == "AWS Network Firewall"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
@@ -221,7 +235,9 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     flows = []
     for left, right, action in re.findall(r"([A-Za-z0-9가-힣 ]+)\s*(?:→|->)\s*([A-Za-z0-9가-힣 ]+)(?:\s*[:：]\s*([^,\n]+))?", req.raw):
         flows.append(DataFlow(from_node=left.strip(), to_node=right.strip(), action=(action or "request/data flow").strip()))
-    if any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")):
+    if any(c.service == "Amazon SQS" for c in components) and any(c.service == "AWS Lambda" for c in components):
+        flows = [DataFlow(from_node="Amazon SQS", to_node="AWS Lambda", action="Event Source Mapping/ReceiveMessage"), DataFlow(from_node="AWS Lambda", to_node="Amazon DynamoDB", action="ConditionalCheck idempotency"), DataFlow(from_node="AWS Lambda", to_node="Amazon SQS DLQ", action="Redrive failed messages")]
+    elif any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")):
         flows = [DataFlow(from_node="Amazon EventBridge Scheduler", to_node="AWS Lambda Rotation", action="Scheduled invocation"), DataFlow(from_node="AWS Lambda Rotation", to_node="AWS Secrets Manager", action="RotateSecret/GetSecretValue"), DataFlow(from_node="AWS Lambda Rotation", to_node="Amazon CloudWatch", action="Audit and failure logs")]
     elif not flows and len(components) >= 2:
         flows = [DataFlow(from_node=components[i].service, to_node=components[i + 1].service, action="configured integration") for i in range(len(components) - 1)]
@@ -232,6 +248,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "AWS KMS" in services: fixed_specs += [{"moduleId": "aws-kms", "field": field} for field in ("Key Alias", "Key Policy", "Encryption Target")]
     if "AWS Secrets Manager" in services: fixed_specs.append({"moduleId": "aws-secrets-manager", "field": "Secret Name/ARN"})
     if "AWS IAM" in services or "AWS Lambda" in services: fixed_specs.append({"moduleId": "aws-lambda", "field": "Least-Privilege IAM Actions"})
+    if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("SQS Queue URL/ARN Environment Variable", "AWS_REGION Environment Variable", "Event Source Mapping", "SQS Receive/Delete Permissions", "DLQ/RedrivePolicy")]
+    if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Idempotency Key", "Status Field", "TTL", "ConditionalCheck Permission")]
     dependencies = [{"from": flow.from_node, "to": flow.to_node, "action": flow.action} for flow in flows]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
