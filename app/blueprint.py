@@ -151,11 +151,17 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
 
     owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
+    if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
+        iam_component = next(c for c in components if c.service == "AWS IAM")
+        modules.append(BlueprintModule(id=iam_component.id, title="AWS IAM 및 접근 제어", component_ids=[iam_component.id]))
     # Supporting components are included in the owning logical module, not dropped or made into noise modules.
     for component in components:
         if component.service == "AWS IAM":
             owner = next((m for m in modules if "lambda" in m.title.lower()), None)
-            if owner: owner.component_ids.append(component.id)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+            elif not owner:
+                owner = next((m for m in modules if m.id == component.id or "iam" in m.title.lower()), None)
+                if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id in {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-permission", "sns-publish-permission"}:
             owner = next((m for m in modules if "lambda" in m.title.lower()), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
