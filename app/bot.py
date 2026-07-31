@@ -330,7 +330,8 @@ class BlueprintApprovalView(discord.ui.View):
 async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
     blueprint = create_blueprint(TaskRequest(raw=raw))
     errors = validate_blueprint(blueprint)
-    if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true":
+    if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true" and ai_control.backend() != "gemini":
+        # /ai gemini 상태에서는 OpenCode API 검토를 호출하지 않고 정적 Blueprint 검증만 사용한다.
         try:
             await message.edit(content="🔍 OpenCode가 과제 구성안을 검토하고 있습니다...", embed=None, view=None)
             errors.extend(await review_blueprint(blueprint))
