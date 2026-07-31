@@ -2,15 +2,14 @@ import json, re
 from .models import TaskDraft
 
 VPC_WEB_PROFILE = {
-    "keywords": ("vpc", "ec2", "alb", "elb"),
+    "keywords": ("vpc", "ec2", "alb"),
     "modules": [
         ("VPC", "VPC", "VPC 및 네트워크", "두 가용 영역에 웹 서버와 ALB를 배치할 네트워크를 구성합니다.", [("VPC Name", "web-vpc"), ("Public Subnet Names", ["web-public-a", "web-public-c"]), ("Internet Gateway Name", "web-igw"), ("Route Table Name", "web-public-rt")]),
         ("EC2", "Instance", "EC2 웹 서버", "서로 다른 가용 영역의 두 웹 서버가 HTTP와 /health 응답을 제공하도록 구성합니다.", [("Instance Names", ["web-server-01", "web-server-02"]), ("User Data File", "userdata.sh"), ("Application Port", "80"), ("Health Check Path", "/health"), ("Required Tag", "Project=WebService")]),
-        ("ALB", "Load Balancer", "Application Load Balancer", "두 웹 서버 중 정상 상태인 대상에 HTTP 요청을 분산합니다.", [("ALB Name", "web-alb"), ("Target Group Name", "web-tg"), ("Listener", "HTTP 80"), ("Health Check Path", "/health"), ("Registered Targets", ["web-server-01", "web-server-02"]) ]),
+        ("ALB", "Load Balancer", "Application Load Balancer", "두 웹 서버 중 정상 상태인 대상에 HTTP 요청을 분산합니다.", [("ALB Name", "web-alb"), ("Target Group Name", "web-tg"), ("Listener", "HTTP 80"), ("Health Check Path", "/health"), ("Registered Targets", ["web-server-01", "web-server-02"])]),
         ("Security Group", "SecurityGroup", "접근 제어", "외부 HTTP 요청은 ALB에서 받고 EC2는 ALB 보안 그룹의 HTTP만 허용합니다.", [("ALB Security Group Name", "web-alb-sg"), ("EC2 Security Group Name", "web-ec2-sg"), ("EC2 HTTP Source", "web-alb-sg")]),
     ],
 }
-
 USERDATA = '''#!/usr/bin/env bash
 set -Eeuo pipefail
 if command -v dnf >/dev/null 2>&1; then dnf install -y nginx; else yum install -y nginx; fi
@@ -20,14 +19,41 @@ printf 'Hello from %s\\n' "$hostname_value" > /usr/share/nginx/html/index.html
 printf 'OK\\n' > /usr/share/nginx/html/health
 systemctl enable --now nginx
 '''
+EVENT_PROFILE = [
+    ("Amazon API Gateway", "API", "HTTP 요청을 SQS로 전달하는 API Gateway 엔드포인트입니다.", [("API Name", "event-api"), ("Protocol", "HTTP"), ("Resource Path", "/events"), ("Method", "POST"), ("Integration Type", "SQS"), ("Target Queue", "event-queue")]),
+    ("Amazon SQS", "Queue", "수신 이벤트를 비동기로 버퍼링하는 SQS 큐입니다.", [("Queue Name", "event-queue"), ("Queue Type", "Standard"), ("Visibility Timeout", "30"), ("Message Retention Period", "345600")]),
+    ("AWS Lambda", "Function", "SQS 메시지를 처리하는 Lambda 함수입니다.", [("Function Name", "event-processor"), ("Runtime", "Python 3.12"), ("Handler", "lambda_function.lambda_handler"), ("Source Queue", "event-queue"), ("Execution Role", "event-processor-role")]),
+    ("Amazon DynamoDB", "Table", "처리된 이벤트의 정형 결과를 저장하는 DynamoDB 테이블입니다.", [("Table Name", "processed-events"), ("Partition Key", "EventId"), ("Billing Mode", "PAY_PER_REQUEST")]),
+    ("Amazon SNS", "Topic", "처리 결과 알림을 발행하는 SNS topic입니다.", [("Topic Name", "event-notifications"), ("Topic Type", "Standard"), ("Publisher", "AWS Lambda")]),
+]
 
 def _has(text, word): return re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text.lower()) is not None
+def _event_requested(raw):
+    text = raw.lower()
+    return all(word in text for word in ("api gateway", "sqs", "lambda", "dynamodb", "sns"))
+
+def _complete_event_bundle(raw, draft):
+    data = draft.model_dump(mode="json"); document = data.get("document") or {}; old = document.get("modules") or []
+    normalized = []
+    for service, resource_type, description, specs in EVENT_PROFILE:
+        blob = lambda m: json.dumps(m, ensure_ascii=False).lower()
+        token = service.split()[-1].lower()
+        candidates = [m for m in old if service.lower() in blob(m) or token in blob(m)]
+        module = dict(candidates[0]) if candidates else {}
+        module.update({"service": service, "resourceType": resource_type, "title": service, "description": module.get("description") or description})
+        fixed = module.get("fixedSpecs") or module.get("fixed_specs") or module.get("specs") or []
+        module["fixedSpecs"] = fixed or [{"label": label, "value": value} for label, value in specs]
+        module.pop("specs", None); normalized.append(module)
+    document["modules"] = normalized
+    document["overview"] = document.get("overview") or "HTTP 이벤트를 수집하고 SQS, Lambda, DynamoDB, SNS를 연결해 비동기 처리 결과를 저장·통지하는 end-to-end 파이프라인입니다."
+    document["architecture"] = document.get("architecture") or "Client → Amazon API Gateway → Amazon SQS → AWS Lambda → Amazon DynamoDB / Amazon SNS"
+    data["document"] = document
+    return TaskDraft.model_validate(data)
 
 def complete_assignment(raw: str, draft: TaskDraft) -> TaskDraft:
+    if _event_requested(raw): return _complete_event_bundle(raw, draft)
     if not (_has(raw, "vpc") and _has(raw, "ec2") and (_has(raw, "alb") or _has(raw, "elb"))): return draft
-    data = draft.model_dump(mode="json")
-    document = data.get("document") or {}
-    modules = document.setdefault("modules", [])
+    data = draft.model_dump(mode="json"); document = data.get("document") or {}; modules = document.setdefault("modules", [])
     existing = " ".join(json.dumps(module, ensure_ascii=False) for module in modules).lower()
     for service, resource_type, title, description, specs in VPC_WEB_PROFILE["modules"]:
         if service.lower() not in existing and title.lower() not in existing:
@@ -37,11 +63,9 @@ def complete_assignment(raw: str, draft: TaskDraft) -> TaskDraft:
     document["requirements"] = list(dict.fromkeys((document.get("requirements") or []) + ["두 가용 영역의 웹 서버", "ALB를 통한 HTTP 동작 검증", "ALB 보안 그룹을 통한 EC2 접근 제어"]))
     data["document"] = document
     files = data.setdefault("deployment_files", [])
-    if not any(str(item.get("path", "")) == "userdata.sh" for item in files if isinstance(item, dict)):
-        files.append({"path": "userdata.sh", "content": USERDATA})
+    if not any(str(item.get("path", "")) == "userdata.sh" for item in files if isinstance(item, dict)): files.append({"path": "userdata.sh", "content": USERDATA})
     provided = data.get("provided_files") or []
-    if not any(isinstance(item, dict) and item.get("name") == "userdata.sh" for item in provided):
-        provided.append({"name": "userdata.sh", "description": "EC2 웹 서버와 /health 응답을 구성하는 User Data 스크립트"})
+    if not any(isinstance(item, dict) and item.get("name") == "userdata.sh" for item in provided): provided.append({"name": "userdata.sh", "description": "EC2 웹 서버와 /health 응답을 구성하는 User Data 스크립트"})
     data["provided_files"] = provided
     data["checks"] = data.get("checks") or []
     if not any("HTTP" in str(check.get("label", "")).upper() or "동작" in str(check.get("label", "")) for check in data["checks"] if isinstance(check, dict)):
