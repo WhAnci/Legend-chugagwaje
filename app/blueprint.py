@@ -148,6 +148,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             components.append(lambda_component)
         add_component("lambda-execution-role", "AWS IAM", "Lambda Execution Role", "Lambda 권한과 로그 기록", "AWS Lambda")
         add_component("lambda-invoke-permission", "AWS Lambda", "Resource Permission", "EventBridge의 Lambda 호출 허용", "AWS Lambda")
+    if s3_component and any(x in text for x in ("lifecycle", "glacier", "30일", "수명 주기")):
+        add_component("s3-lifecycle-configuration", "Amazon S3", "Lifecycle Configuration", "30일 후 Glacier 전환", "Amazon S3")
     if s3_component and any(x in text for x in ("sse-kms", "kms", "암호화")):
         add_component("kms-key", "AWS KMS", "KMS Key", "S3 객체 암호화", "Amazon S3")
         add_component("kms-key-policy", "AWS KMS", "Key Policy", "S3/Lambda 암호화 권한", "Amazon S3")
@@ -194,7 +196,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
         add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "s3-lifecycle-configuration", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -210,7 +212,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         elif component.id in {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission"}:
             owner = next((m for m in modules if "lambda" in m.title.lower()), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
-        elif component.id == "s3-event-notification":
+        elif component.id in {"s3-event-notification", "s3-lifecycle-configuration"}:
             owner = next((m for m in modules if m.title == "Amazon S3"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id in {"kms-key", "kms-key-policy"}:
@@ -266,6 +268,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         module.dependencies = []
     if any(c.service == "Amazon SQS" for c in components) and any(c.service == "AWS Lambda" for c in components):
         flows = [DataFlow(from_node="Amazon SQS", to_node="AWS Lambda", action="Event Source Mapping/ReceiveMessage"), DataFlow(from_node="AWS Lambda", to_node="Amazon DynamoDB", action="ConditionalCheck idempotency"), DataFlow(from_node="AWS Lambda", to_node="Amazon SQS DLQ", action="Redrive failed messages")]
+    elif any(c.service == "Amazon S3" for c in components) and any(x in text for x in ("lifecycle", "glacier", "30일", "수명 주기")):
+        flows = [DataFlow(from_node="Client", to_node="Amazon S3", action="PutObject"), DataFlow(from_node="Amazon S3", to_node="AWS Lambda", action="ObjectCreated Event Notification"), DataFlow(from_node="AWS Lambda", to_node="Amazon S3", action="Tag validation and delete invalid object"), DataFlow(from_node="Amazon S3 Lifecycle", to_node="Amazon S3 Glacier", action="Transition after 30 days")]
     elif any(c.service == "Amazon S3" for c in components) and any(c.service == "AWS Lambda" for c in components):
         flows = [DataFlow(from_node="Amazon S3", to_node="AWS Lambda", action="ObjectCreated Event Notification"), DataFlow(from_node="AWS Lambda", to_node="Amazon SNS", action="Publish"), DataFlow(from_node="AWS Lambda", to_node="Amazon CloudWatch", action="Logs")]
     elif any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")):
@@ -284,8 +288,12 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "Amazon EC2" in services: fixed_specs += [{"moduleId": "amazon-ec2", "field": field} for field in ("Subnet", "Security Group", "Instance Profile", "User Data")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Partition Key", "DynamoDB Access Policy")]
     if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("SQS Queue URL/ARN Environment Variable", "AWS_REGION Environment Variable", "Event Source Mapping", "SQS Receive/Delete Permissions", "DLQ/RedrivePolicy")]
+    if "Amazon S3" in services:
+        fixed_specs += [{"moduleId": "amazon-s3", "field": field} for field in ("Bucket Name/Pattern", "Region", "Versioning", "Public Access Block", "Encryption")]
+    if "Amazon S3" in services and any(c.id == "s3-lifecycle-configuration" for c in components):
+        fixed_specs += [{"moduleId": "amazon-s3", "field": field} for field in ("Lifecycle Rule", "Transition After: 30 days", "Storage Class: Glacier")]
     if "Amazon S3" in services and "AWS Lambda" in services:
-        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("BUCKET_NAME Environment Variable", "S3 Object Trigger", "Handler", "S3 Invoke Permission")]
+        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("BUCKET_NAME Environment Variable", "LOG_LEVEL Environment Variable", "VALID_TAG_KEY Environment Variable", "S3 Object Trigger", "Handler", "S3 Invoke Permission")]
         fixed_specs += [{"moduleId": "amazon-s3", "field": field} for field in ("Event Type: s3:ObjectCreated:*", "Lambda Target ARN", "Object Key Filters")]
         fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("Invoke Principal: s3.amazonaws.com", "Source Bucket ARN", "Action: lambda:InvokeFunction")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Idempotency Key", "Status Field", "TTL", "ConditionalCheck Permission")]
@@ -298,6 +306,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
     if any(c.service == "Amazon S3" for c in components) and any(c.service == "AWS Lambda" for c in components):
         behavior_checks.append({"type": "s3_lambda_e2e", "description": "S3 테스트 객체 업로드 → Event Notification → Lambda 처리/Checksum 검증 → 성공·실패 객체 분기 → CloudWatch 로그 확인"})
+    if any(c.service == "Amazon S3" for c in components) and any(x in text for x in ("lifecycle", "glacier", "30일", "수명 주기")):
+        behavior_checks.append({"type": "s3_lifecycle", "description": "태그 조건 객체 업로드 → Lambda 검증/삭제 → 30일 후 S3 Lifecycle의 Glacier 전환 검증"})
     if any(c.service == "AWS Network Firewall" for c in components): behavior_checks.append({"type": "network_behavior", "description": "EC2에서 허용 도메인과 차단 도메인으로 실제 트래픽을 전송하고 Firewall Endpoint 경유·허용/차단·Alert 로그를 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
     goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())
