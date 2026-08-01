@@ -2,6 +2,7 @@
 import json, re
 from pydantic import BaseModel, ConfigDict, Field
 from .models import TaskDraft, TaskRequest
+from .service_catalog import AWS_SERVICE_CATALOG
 
 def _camel(value: str) -> str:
     head, *tail = value.split("_")
@@ -76,6 +77,8 @@ SERVICE_ALIASES = {
     "Amazon CloudWatch": ("cloudwatch", "log group", "alarm", "metric"),
     "AWS IAM": ("iam", "execution role", "trust policy", "allowed actions"),
 }
+for _entry in AWS_SERVICE_CATALOG:
+    SERVICE_ALIASES.setdefault(_entry["canonicalName"], tuple(_entry["aliases"]))
 
 SERVICE_HINTS = [
     ("AWS Lambda", ("lambda", "함수"), "Function", "실행 코드"),

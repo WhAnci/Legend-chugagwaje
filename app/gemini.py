@@ -3,6 +3,8 @@ import httpx
 from .models import TaskDraft, TaskRequest
 from .prompt import make_prompt
 from .usage import record as record_usage
+from .topic_validation import validate_topic_candidate, filter_topic_candidates
+from .fallback_topics import FALLBACK_TOPIC_POOL
 
 class GeminiError(RuntimeError): pass
 
@@ -86,7 +88,7 @@ async def suggest_topics(raw: str, previous: list | None = None) -> list[dict]:
 
 각 과제에는 실제 동작 검증이 있어야 한다. 예: 중복 결과 방지, 취약 이미지 차단, 네트워크 접근 차단, 실제 백업 복원, 엣지 헤더 차단, DLQ 재처리, SNS 필터링, 만료 자격증명 거부, 선택적 장애 복구, 멱등성 검증.
 
-AI, IoT, 게임, IAM Identity Center는 제외한다. 보조 서비스는 최대 2개이며, 60분 안에 생성·연결·동작 테스트·CLI 자동 채점·저비용 정리가 가능해야 한다.
+AI, IoT, 게임, IAM Identity Center는 제외한다. supportingServices는 2~4개, 총 logical service module은 3~5개로 구성한다. 4개 구성을 우선하며, 60분 안에 생성·연결·동작 테스트·CLI 자동 채점·저비용 정리가 가능해야 한다.
 
 최근 주제와 구조적 중복 기준: 같은 주력 서비스, 리소스 유형, 이벤트 흐름, 실패 조건, 검증 방식이 겹치거나 제목만 바뀐 경우 제외한다.
 최근 주제 이력:
@@ -94,7 +96,7 @@ AI, IoT, 게임, IAM Identity Center는 제외한다. 보조 서비스는 최대
 사용자 요청:
 {raw}
 
-내부적으로 간단히 비교한 뒤 가장 차별화된 3개만 선택하라. 장황한 설명 없이 JSON 배열만 반환하라. 각 원소는 title, problemType, taskType, primaryService, supportingServices, scenario, coreWork 배열, behaviorValidation, difference 필드를 가져야 한다."""
+내부적으로 간단히 비교한 뒤 가장 차별화된 3개만 선택하라. 장황한 설명 없이 JSON 배열만 반환하라. 각 원소는 title, problemType, taskType, primaryService, supportingServices(2~4개), expectedModules(3~5개 service/role/required), architectureDomain, architecturePattern, estimatedModuleCount, scenario, coreWork 배열, behaviorValidation, difference 필드를 가져야 한다. 세 후보는 서로 다른 domain/pattern을 사용하고 Lambda/S3/EventBridge 중심 반복을 피하라."""
     try:
         items = _array(await _call(prompt, timeout=float(os.getenv("GEMINI_TOPIC_TIMEOUT_SECONDS", "35"))) )
         if isinstance(items, list) and len(items) >= 3 and all(isinstance(x, dict) for x in items[:3]):
@@ -110,19 +112,23 @@ AI, IoT, 게임, IAM Identity Center는 제외한다. 보조 서비스는 최대
                     "coreWork": [str(x) for x in item.get("coreWork", [])],
                     "behaviorValidation": str(item.get("behaviorValidation", "")).strip(),
                     "difference": str(item.get("difference", "")).strip(),
+                    "expectedModules": item.get("expectedModules", []),
+                    "architectureDomain": str(item.get("architectureDomain", "")).strip(),
+                    "architecturePattern": str(item.get("architecturePattern", "")).strip(),
+                    "estimatedModuleCount": int(item.get("estimatedModuleCount", len(item.get("expectedModules", [])) or 0)),
                 })
-            if all(x["title"] and x["primaryService"] for x in values): return values
-            raise ValueError("주제 후보 필수 필드가 비어 있습니다")
+            valid = filter_topic_candidates(values, previous or [])
+            if len(valid) >= 3: return valid[:3]
+            raise ValueError("3개 logical module과 다양성 검증을 통과한 후보가 부족합니다")
     except Exception as exc:
         logger.warning("topic suggestion failed; using deterministic fallback: %s", str(exc)[:300])
     # 주제 후보는 산출물 생성 전 선택 화면용이므로 Gemini 일시 장애나 JSON 형식 오류가
     # 전체 UX를 막지 않도록 결정적 후보를 제공한다. 실제 과제 산출물은 승인 후
     # Blueprint/검증 파이프라인을 다시 통과한다.
-    return [
-        {"title": "S3 이벤트 기반 민감 파일 격리 및 알림", "problemType": "보안 통제", "taskType": "이벤트 처리형", "primaryService": "Amazon S3", "supportingServices": ["AWS Lambda", "AWS KMS", "Amazon SNS"], "scenario": "S3 객체 이벤트를 Lambda로 처리하여 민감 파일을 KMS로 암호화된 격리 영역에 이동하고 알림을 발행합니다.", "coreWork": ["S3 이벤트 연결", "Lambda 최소 권한", "KMS 암호화", "SNS 알림"], "behaviorValidation": "민감 파일 격리와 원문 비노출을 검증합니다.", "difference": "이벤트·암호화·알림을 결합한 보안 흐름"},
-        {"title": "ECR 취약 이미지 자동 격리", "problemType": "취약점 대응", "taskType": "자동화형", "primaryService": "Amazon ECR", "supportingServices": ["Amazon EventBridge", "AWS Lambda"], "scenario": "ECR 이미지 스캔 결과를 이벤트로 받아 위험 이미지를 자동 태깅 또는 격리합니다.", "coreWork": ["Scan on Push", "EventBridge Rule", "Lambda 판정 및 격리"], "behaviorValidation": "위험 이미지와 정상 이미지의 처리 결과를 비교합니다.", "difference": "취약점 이벤트 기반 자동 대응"},
-        {"title": "CloudFront와 WAF 기반 엣지 보안 통제", "problemType": "트래픽 제어", "taskType": "보안 강화형", "primaryService": "Amazon CloudFront", "supportingServices": ["AWS WAF", "Amazon S3", "CloudFront Functions"], "scenario": "정적 콘텐츠 앞단에 WAF와 엣지 함수를 배치하여 공격 요청과 위험 지역 트래픽을 차단합니다.", "coreWork": ["S3 OAC", "WAF 규칙", "Geo 차단", "보안 헤더"], "behaviorValidation": "정상 요청 허용과 공격 요청 차단을 검증합니다.", "difference": "엣지 계층 중심의 보안 검증"}
-    ]
+    fallback = list(FALLBACK_TOPIC_POOL)
+    recent_titles = {x.get("title") for x in (previous or []) if isinstance(x, dict)}
+    available = [x for x in fallback if x.get("title") not in recent_titles]
+    return available[:3] if len(available) >= 3 else fallback[:3]
 
 async def review_draft(raw: str, draft) -> list[str]:
     """DeepSeek 산출물에 대한 단 한 번의 최종 내용 검토."""
