@@ -17,7 +17,7 @@ from .usage import summary as usage_summary, links as usage_links
 from . import ai_control
 from .completeness import complete_assignment
 from .blueprint import AssignmentBlueprint, check_approved_modules, create_blueprint, validate_blueprint
-from .revision import normalize_issues
+from .revision import normalize_issues, repair_references
 from .opencode import review_blueprint
 
 load_dotenv()
@@ -336,7 +336,9 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
     reviewer_warning = ""
     for revision in range(2):
         blueprint = create_blueprint(TaskRequest(raw=working_raw))
+        blueprint, reference_repairs = repair_references(blueprint)
         errors = validate_blueprint(blueprint)
+        if reference_repairs: logger.info("blueprint reference repairs=%s", reference_repairs)
         if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true" and ai_control.backend() != "gemini":
             try:
                 await message.edit(content=f"🔍 OpenCode가 과제 구성안을 검토하고 있습니다... (검토 {revision + 1}/2)", embed=None, view=None)

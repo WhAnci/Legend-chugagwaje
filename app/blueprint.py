@@ -54,6 +54,7 @@ class AssignmentBlueprint(BlueprintModel):
     requirements: list[dict] = Field(default_factory=list)
     behavior_checks: list[dict] = Field(default_factory=list)
     dependencies: list[dict] = Field(default_factory=list)
+    architecture_mode: dict = Field(default_factory=dict)
     risks: list[str] = Field(default_factory=list)
 
 SERVICE_ALIASES = {
@@ -99,6 +100,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     text = f"{req.raw} {req.service} {req.analysis}".lower()
     # Reviewer 오류는 사용자 요구 서비스가 아니므로 phantom module을 만들지 않는다.
     text = text.split("blueprint 자동 수정 지시", 1)[0]
+    scheduler_requested = any(x in text for x in ("eventbridge scheduler", "scheduler", "스케줄러"))
+    architecture_mode = {"type": "EVENTBRIDGE_SCHEDULER_ROTATION" if scheduler_requested else "NATIVE_SECRETS_MANAGER_ROTATION" if "secrets manager" in text or "secret" in text else "UNSPECIFIED", "reason": "사용자 요청에 Scheduler가 명시됨" if scheduler_requested else "Secrets Manager 기본 Rotation 방식"}
     components = []
     for service, hints, resource, role in SERVICE_HINTS:
         if any((re.search(rf"(?<![a-z0-9]){re.escape(hint.lower())}(?![a-z0-9])", text) if re.fullmatch(r"[a-z0-9 -]+", hint.lower()) else hint.lower() in text) for hint in hints):
@@ -180,8 +183,13 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         if not lambda_component:
             lambda_component = BlueprintComponent(id="aws-lambda", service="AWS Lambda", resource_type="Function", role="Secret Rotation 실행")
             components.append(lambda_component)
-        add_component("rotation-schedule", "Amazon EventBridge", "Scheduler", "Secret Rotation 주기 실행")
-        add_component("rotation-lambda-permission", "AWS Lambda", "Resource Permission", "Scheduler의 Rotation Lambda 호출 허용", "AWS Lambda")
+        if architecture_mode["type"] == "EVENTBRIDGE_SCHEDULER_ROTATION":
+            add_component("rotation-schedule", "Amazon EventBridge", "Scheduler", "Secret Rotation 주기 실행")
+            add_component("rotation-scheduler-role", "AWS IAM", "Scheduler Execution Role", "Scheduler의 Lambda 호출 권한")
+        else:
+            add_component("secrets-rotation-schedule", "AWS Secrets Manager", "Rotation Schedule", "Secrets Manager native rotation")
+            add_component("secrets-rotation-configuration", "AWS Secrets Manager", "Rotation Configuration", "Rotation Lambda ARN과 Rules")
+        add_component("rotation-lambda-permission", "AWS Lambda", "Resource Permission", "선택한 Rotation 방식의 호출 권한", "AWS Lambda")
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "Rotation 감사·실패 모니터링")
         add_component("cloudwatch-rotation-logs", "Amazon CloudWatch", "Log Group/Alarm", "Rotation 감사·실패 모니터링", "Amazon CloudWatch")
     if any(x in text for x in ("network firewall", "firewall policy", "stateful rule group", "firewall endpoint")):
@@ -208,7 +216,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
         add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "s3-event-notification", "s3-lifecycle-configuration", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "rotation-schedule", "secrets-rotation-schedule", "secrets-rotation-configuration", "rotation-scheduler-role", "s3-event-notification", "s3-lifecycle-configuration", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -223,6 +231,15 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
                 if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id in {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission"}:
             owner = next((m for m in modules if "lambda" in m.title.lower()), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id in {"secrets-rotation-schedule", "secrets-rotation-configuration"}:
+            owner = next((m for m in modules if m.title == "AWS Secrets Manager"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "rotation-schedule":
+            owner = next((m for m in modules if m.title == "Amazon EventBridge"), None)
+            if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+        elif component.id == "rotation-scheduler-role":
+            owner = next((m for m in modules if "iam" in m.title.lower() or "lambda" in m.title.lower()), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
         elif component.id in {"s3-event-notification", "s3-lifecycle-configuration"}:
             owner = next((m for m in modules if m.title == "Amazon S3"), None)
@@ -327,7 +344,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if any(c.service == "AWS Network Firewall" for c in components): behavior_checks.append({"type": "network_behavior", "description": "EC2에서 허용 도메인과 차단 도메인으로 실제 트래픽을 전송하고 Firewall Endpoint 경유·허용/차단·Alert 로그를 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
     goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())
-    return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, fixed_specs=fixed_specs, permission_specs=permission_specs, dependencies=dependencies, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
+    return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, fixed_specs=fixed_specs, permission_specs=permission_specs, dependencies=dependencies, behavior_checks=behavior_checks, architecture_mode=architecture_mode, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
 
 def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     errors = []
@@ -343,6 +360,15 @@ def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
             errors.append("dataFlow에 revision 지시문이 포함되어 있습니다.")
         if "iam" in flow.from_node.lower() or "iam" in flow.to_node.lower():
             errors.append("IAM Role/Policy는 dataFlow 실행 노드가 될 수 없습니다.")
+    module_ids = {m.id for m in blueprint.logical_modules}
+    component_ids = {c.id for c in blueprint.components}
+    for spec in blueprint.fixed_specs:
+        if spec.get("moduleId") and spec.get("moduleId") not in module_ids: errors.append(f"존재하지 않는 moduleId 참조: {spec.get('moduleId')}")
+    for module in blueprint.logical_modules:
+        for component_id in module.component_ids:
+            if component_id not in component_ids: errors.append(f"존재하지 않는 componentId 참조: {component_id}")
+    if blueprint.architecture_mode.get("type") == "NATIVE_SECRETS_MANAGER_ROTATION" and any(c.service == "Amazon EventBridge" and "rotation" in c.role.lower() for c in blueprint.components):
+        errors.append("Native Rotation과 EventBridge Scheduler Rotation이 동시에 구성되었습니다.")
     for file in blueprint.provided_files:
         if not file.used_by_module: errors.append(f"지급파일 사용 module이 없습니다: {file.path}")
         if file.path.endswith("lambda_function.py") and not any(c.service == "AWS Lambda" for c in blueprint.components): errors.append("Lambda 지급파일이 있지만 Lambda component가 없습니다.")

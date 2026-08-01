@@ -29,7 +29,17 @@ def normalize_issues(values) -> list[dict]:
 def _component(blueprint, service):
     return next((c for c in blueprint.components if c.service.lower() == service.lower() or service.lower() in c.service.lower()), None)
 
-def deterministic_autofix(blueprint: AssignmentBlueprint, issues: list[dict]) -> tuple[AssignmentBlueprint, list[dict]]:
+def repair_references(blueprint: AssignmentBlueprint) -> tuple[AssignmentBlueprint, list[str]]:
+    result = blueprint.model_copy(deep=True); module_ids = {m.id for m in result.logical_modules}; repairs = []
+    for spec in result.fixed_specs:
+        module_id = str(spec.get("moduleId", ""))
+        if module_id and module_id not in module_ids:
+            candidates = [m for m in result.logical_modules if module_id.split("-")[-1] in m.title.lower() or module_id.replace("-", " ") in m.title.lower()]
+            if len(candidates) == 1:
+                spec["moduleId"] = candidates[0].id; repairs.append(f"fixedSpec.moduleId: {module_id} -> {candidates[0].id}")
+    return result, repairs
+
+def deterministic_autofix(blueprint: AssignmentBlueprint, issues: list[dict]) -> tuple[AssignmentBlueprint, list[str]]:
     """Apply only issue-scoped edits; never replace component/module arrays."""
     result = blueprint.model_copy(deep=True); resolved = []
     all_text = " ".join((i.get("errorType", "") + " " + i.get("description", "") + " " + i.get("requiredAction", "")).lower() for i in issues)
