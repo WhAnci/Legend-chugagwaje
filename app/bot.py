@@ -329,53 +329,28 @@ class BlueprintApprovalView(discord.ui.View):
         await show_blueprint(interaction.message, pending["raw"] + suffix, self.owner_id)
 
 async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
-    # Reviewer 오류를 사용자에게 바로 노출하지 않고 Blueprint를 새 객체로 보강해 재검토한다.
-    working_raw = raw
-    blueprint = None
-    errors = []
-    reviewer_warning = ""
-    for revision in range(2):
-        blueprint = create_blueprint(TaskRequest(raw=working_raw))
-        blueprint, reference_repairs = repair_references(blueprint)
-        errors = validate_blueprint(blueprint)
-        if reference_repairs: logger.info("blueprint reference repairs=%s", reference_repairs)
-        if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true" and ai_control.backend() != "gemini":
-            try:
-                await message.edit(content=f"🔍 OpenCode가 과제 구성안을 검토하고 있습니다... (검토 {revision + 1}/2)", embed=None, view=None)
-                review_items = normalize_issues(await review_blueprint(blueprint))
-                blocking = [item for item in review_items if item.get("severity") in {"critical", "major", "error"} and (item.get("requirementId") or item.get("evidence"))]
-                recommendations = [item for item in review_items if item not in blocking]
-                if recommendations:
-                    reviewer_warning = "Reviewer 권장사항 " + str(len(recommendations)) + "건은 생성 차단 없이 기록했습니다."
-                errors.extend([item.get("description") or item.get("requiredAction") or item.get("errorType") for item in blocking])
-                if errors:
-                    from .revision import deterministic_autofix
-                    repaired, resolved = deterministic_autofix(blueprint, review_items)
-                    if resolved:
-                        blueprint = repaired
-                        errors = []
-                        reviewer_warning = "결정적 자동 보정 적용: " + ", ".join(resolved)
-            except Exception as exc:
-                # OpenCode provider 장애는 Blueprint 결함이 아니다. 정적 검증으로 계속 진행한다.
-                reviewer_warning = f"OpenCode Reviewer 일시 unavailable: {str(exc) or type(exc).__name__}"
-                logger.warning(reviewer_warning)
-                errors = []
-        if not errors: break
-        logger.warning("blueprint revision=%d requested: %s", revision + 1, errors[:5])
-        working_raw += "\n\nBlueprint 자동 수정 지시:\n" + json.dumps(errors, ensure_ascii=False)
-    if errors:
-        failure_text = "❌ 구성안 자동 보정 후에도 검토를 통과하지 못했습니다. PDF와 파일은 생성하지 않습니다.\n" + "\n".join(f"- {str(error)[:240]}" for error in errors[:6])
-        await message.edit(content=failure_text[:1950], embed=None, view=None)
-        logger.warning("blueprint rejected after revisions: %s", errors)
+    """Build once, deterministically validate, then show for user approval. No LLM revision loop."""
+    blueprint = create_blueprint(TaskRequest(raw=raw))
+    blueprint, reference_repairs = repair_references(blueprint)
+    structural_errors = validate_blueprint(blueprint)
+    if reference_repairs: logger.info("blueprint reference repairs=%s", reference_repairs)
+    if structural_errors:
+        text = "❌ 구성안 구조를 읽을 수 없습니다.\n" + "\n".join(f"- {str(error)[:260]}" for error in structural_errors[:6])
+        await message.edit(content=text[:1950], embed=None, view=None)
         return
-    # 사용자 확인 버튼 없이, OpenCode Reviewer를 통과한 Blueprint를 즉시 승인한다.
-    notice = "✅ Blueprint 검토 통과"
-    if reviewer_warning: notice += f"\n⚠️ {reviewer_warning}\n정적 구조 검증으로 계속 진행합니다."
-    await message.edit(content=notice + "\n🛠️ 승인된 구성안으로 과제 산출물을 자동 생성합니다.", embed=blueprint_embed(blueprint), view=None)
-    context = JobContext(job_id=uuid.uuid4().hex, channel_id=message.channel.id, message_id=message.id, user_id=owner_id, source=message)
-    active_jobs[context.job_id] = context
-    logger.info("approved blueprint auto-generation started job=%s", context.job_id)
-    await run_generation(message, raw, context, blueprint)
+    warnings = []
+    if os.getenv("LLM_REVIEW_BLOCKING", "false").lower() == "true":
+        logger.warning("LLM_REVIEW_BLOCKING=true is ignored; Reviewer is advisory-only")
+    if os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true" and ai_control.backend() != "gemini":
+        try:
+            review_items = normalize_issues(await review_blueprint(blueprint))
+            warnings = [item.get("description") or item.get("requiredAction") or item.get("errorType") for item in review_items]
+        except Exception as exc:
+            warnings = [f"OpenCode Reviewer unavailable: {type(exc).__name__}"]
+            logger.warning("advisory reviewer unavailable: %r", exc)
+    pending_blueprints[message.id] = {"raw": raw, "blueprint": blueprint, "warnings": warnings, "channel_id": message.channel.id, "owner_id": owner_id, "state": "AWAITING_APPROVAL"}
+    warning_text = "\n검토 권장 사항: " + " / ".join(str(x)[:160] for x in warnings[:3]) if warnings else ""
+    await message.edit(content="📋 과제 구성안 확인\n아직 PDF·과제지·채점파일을 생성하지 않았습니다." + warning_text, embed=blueprint_embed(blueprint), view=BlueprintApprovalView(owner_id, message.id))
 
 async def choose_again(interaction: discord.Interaction, topic: dict | None, previous: list[dict] | None = None):
     if not has_authorized_role(interaction.user):
