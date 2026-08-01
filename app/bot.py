@@ -16,7 +16,7 @@ from .topic_history import load as load_topic_history, add as remember_topics
 from .usage import summary as usage_summary, links as usage_links
 from . import ai_control
 from .completeness import complete_assignment
-from .blueprint import AssignmentBlueprint, check_approved_modules, create_blueprint, validate_blueprint
+from .blueprint import AssignmentBlueprint, check_approved_modules, match_approved_modules, create_blueprint, validate_blueprint
 from .revision import normalize_issues, repair_references
 from .models import align_modules_to_approved_blueprint, complete_missing_approved_modules
 from .module_decomposition import official_service
@@ -118,8 +118,7 @@ async def create_job(raw: str, approved_blueprint: AssignmentBlueprint | None = 
         if approved_blueprint:
             approved_errors = check_approved_modules(approved_blueprint, draft)
             if approved_errors:
-                actual = {official_service(m.primary_service or m.service or m.title).casefold() for m in (draft.document.modules if draft.document else [])}
-                missing_ids = [m.id for m in approved_blueprint.logical_modules if official_service(m.title).casefold() not in actual]
+                missing_ids, _extra_ids, _matched = match_approved_modules(approved_blueprint, draft)
                 if missing_ids and not targeted_attempted:
                     logger.warning("approved module genuinely missing; targeted completion ids=%s", missing_ids)
                     targeted_attempted = True

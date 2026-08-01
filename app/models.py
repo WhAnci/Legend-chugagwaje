@@ -396,17 +396,25 @@ class TaskDraft(BaseModel):
         return data
 
 def align_modules_to_approved_blueprint(draft: TaskDraft, approved_blueprint) -> TaskDraft:
-    """Preserve approved module IDs while allowing human-friendly generated titles."""
+    """Align IDs without collapsing distinct services such as VPC and Client VPN."""
     if not draft.document or not approved_blueprint: return draft
-    approved = {}
+    approved_by_id = {module.id: module for module in approved_blueprint.logical_modules}
+    approved_by_service = {}
     for module in approved_blueprint.logical_modules:
-        approved[official_service(module.title).strip().casefold()] = (module.id, module.title)
+        key = official_service(module.title).strip().casefold()
+        approved_by_service.setdefault(key, []).append(module)
+    used_ids = set()
     for module in draft.document.modules:
-        key = official_service(module.primary_service or module.service or module.title or module.id).strip().casefold()
-        if key in approved:
-            module.id, official_title = approved[key]
-            module.service = official_title
-            module.primary_service = official_title
+        current_service = official_service(module.primary_service or module.service or module.title or module.id).strip().casefold()
+        target = approved_by_id.get(module.id)
+        if target is None or official_service(target.title).strip().casefold() != current_service:
+            candidates = [item for item in approved_by_service.get(current_service, []) if item.id not in used_ids]
+            target = candidates[0] if len(candidates) == 1 else None
+        if target is not None:
+            module.id = target.id
+            module.service = target.title
+            module.primary_service = target.title
+            used_ids.add(target.id)
     return draft
 
 def complete_missing_approved_modules(draft: TaskDraft, approved_blueprint, missing_module_ids: list[str]) -> TaskDraft:
@@ -416,7 +424,14 @@ def complete_missing_approved_modules(draft: TaskDraft, approved_blueprint, miss
     modules = draft.document.modules
     existing_ids = {m.id for m in modules}
     for blueprint_module in approved_blueprint.logical_modules:
-        if blueprint_module.id not in missing or blueprint_module.id in existing_ids: continue
+        if blueprint_module.id not in missing: continue
+        existing = next((m for m in modules if m.id == blueprint_module.id), None)
+        if existing is not None:
+            expected_service = official_service(blueprint_module.title).strip().casefold()
+            actual_service = official_service(existing.primary_service or existing.service or existing.title).strip().casefold()
+            if actual_service == expected_service: continue
+            existing.id = f"{existing.id}-unmatched"
+            existing_ids.discard(blueprint_module.id)
         specs = [{"label": str(spec.get("label", spec.get("field", "설정"))), "value": str(spec.get("value", spec.get("field", "")))} for spec in blueprint_module.fixed_specs if isinstance(spec, dict)]
         if blueprint_module.id == "amazon-cloudwatch":
             specs = [{"label": label, "value": value} for label, value in [

@@ -10,6 +10,7 @@ AWS_SERVICE_CATALOG = [
  {"canonicalName":"Amazon CloudFront","aliases":["cloudfront","cdn"],"defaultResourceType":"Distribution","domain":"NETWORK_EDGE","defaultRole":"엣지 배포","commonChildren":["Origin","Cache Policy"]},
  {"canonicalName":"AWS Global Accelerator","aliases":["global accelerator"],"defaultResourceType":"Accelerator","domain":"NETWORK_EDGE","defaultRole":"글로벌 트래픽 전환","commonChildren":["Listener","Endpoint Group"]},
  {"canonicalName":"Amazon VPC Lattice","aliases":["vpc lattice"],"defaultResourceType":"Service Network","domain":"NETWORK_EDGE","defaultRole":"서비스 연결","commonChildren":["Service","Listener","Target Group"]},
+ {"canonicalName":"Amazon VPC Endpoint","aliases":["vpc endpoint","interface vpc endpoint","interface endpoint"],"defaultResourceType":"Interface Endpoint","domain":"NETWORK_EDGE","defaultRole":"VPC 내부 서비스 연결","commonChildren":["Private DNS","Endpoint Policy"]},
  {"canonicalName":"AWS Client VPN","aliases":["client vpn","aws client vpn","클라이언트 vpn","원격 접속 vpn"],"defaultResourceType":"Client VPN Endpoint","domain":"NETWORK_EDGE","defaultRole":"원격 사용자의 VPC 비공개 접근","commonChildren":["Client VPN Endpoint","Target Network Association","Authorization Rule","Route","Security Group"]},
  {"canonicalName":"AWS Site-to-Site VPN","aliases":["site-to-site vpn","site to site vpn","s2s vpn","aws vpn","사이트 간 vpn","site-to-site"],"defaultResourceType":"VPN Connection","domain":"NETWORK_EDGE","defaultRole":"외부 네트워크와 VPC의 암호화 연결","commonChildren":["Customer Gateway","Virtual Private Gateway 또는 Transit Gateway","VPN Connection","VPN Tunnel","Route Propagation"]},
  {"canonicalName":"AWS Network Firewall","aliases":["network firewall"],"defaultResourceType":"Firewall","domain":"NETWORK_EDGE","defaultRole":"네트워크 트래픽 제어","commonChildren":["Rule Group","Firewall Policy","Endpoint"]},
@@ -30,6 +31,29 @@ AWS_SERVICE_CATALOG = [
  {"canonicalName":"AWS DMS","aliases":["dms","database migration service"],"defaultResourceType":"Replication Instance","domain":"STORAGE_MIGRATION","defaultRole":"데이터베이스 마이그레이션","commonChildren":["Endpoint","Replication Task"]},
  {"canonicalName":"Amazon CloudWatch","aliases":["cloudwatch"],"defaultResourceType":"Log Group/Metric","domain":"OPERATIONS_GOVERNANCE","defaultRole":"관측·운영 검증","commonChildren":["Log Group","Metric"]},
 ]
+
+def _normalize_service_text(value):
+    return " ".join(str(value or "").casefold().strip().split())
+
+def canonical_service_name(value: str) -> str:
+    text = _normalize_service_text(value)
+    for item in AWS_SERVICE_CATALOG:
+        if text == _normalize_service_text(item["canonicalName"]):
+            return item["canonicalName"]
+    candidates = [(alias, item["canonicalName"]) for item in AWS_SERVICE_CATALOG for alias in item.get("aliases", [])]
+    for alias, canonical in sorted(candidates, key=lambda pair: len(_normalize_service_text(pair[0])), reverse=True):
+        normalized = _normalize_service_text(alias)
+        if normalized and (text == normalized or f" {normalized} " in f" {text} "):
+            return canonical
+    # Common logical-title suffixes are retried without changing service identity.
+    stripped = text
+    for suffix in (" application", " 애플리케이션", " instance", " endpoint", " connection"):
+        if stripped.endswith(suffix):
+            stripped = stripped[:-len(suffix)].strip()
+            break
+    if stripped != text:
+        return canonical_service_name(stripped)
+    return str(value or "").strip()
 
 def catalog_by_name(name):
     return next((item for item in AWS_SERVICE_CATALOG if item["canonicalName"].lower() == str(name).lower()), None)

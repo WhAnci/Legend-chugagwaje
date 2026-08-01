@@ -1,10 +1,11 @@
 """Pre-generation assignment blueprint and deterministic structural review."""
-import json, re
+import json, re, logging
 from collections import Counter
 from .module_decomposition import official_service
 from pydantic import BaseModel, ConfigDict, Field
 from .models import TaskDraft, TaskRequest
-from .service_catalog import AWS_SERVICE_CATALOG
+from .service_catalog import AWS_SERVICE_CATALOG, canonical_service_name
+logger = logging.getLogger("aws-task-blueprint")
 
 def _camel(value: str) -> str:
     head, *tail = value.split("_")
@@ -493,20 +494,34 @@ def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     return errors
 
 def _blueprint_module_key(module):
-    value = module.title or module.id
-    return official_service(value).strip().casefold()
+    return official_service(module.title or module.id).strip().casefold()
 
 def _draft_module_key(module):
-    value = module.primary_service or module.service or module.title or module.id
-    return official_service(value).strip().casefold()
+    return official_service(module.primary_service or module.service or module.title or module.id).strip().casefold()
+
+def match_approved_modules(blueprint: AssignmentBlueprint, draft: TaskDraft):
+    actual = list(draft.document.modules if draft.document else [])
+    missing, matched = [], []
+    expected_debug = []
+    for expected in blueprint.logical_modules:
+        expected_service = _blueprint_module_key(expected)
+        expected_debug.append([expected.id, expected_service])
+        candidate = next((item for item in actual if item.id == expected.id and _draft_module_key(item) == expected_service), None)
+        if candidate is None:
+            candidates = [item for item in actual if _draft_module_key(item) == expected_service]
+            if len(candidates) == 1: candidate = candidates[0]
+        if candidate is None:
+            missing.append(expected.id)
+        else:
+            actual.remove(candidate); matched.append((expected, candidate))
+    extra = [item.id for item in actual]
+    logger.info("approved module comparison expected=%s actual=%s", expected_debug, [[m.id, _draft_module_key(m)] for m in draft.document.modules] if draft.document else [])
+    return missing, extra, matched
 
 def check_approved_modules(blueprint: AssignmentBlueprint, draft: TaskDraft) -> list[str]:
     if not draft.document:
         return ["승인 Blueprint와 비교할 최종 document가 없습니다."]
-    expected = Counter(_blueprint_module_key(module) for module in blueprint.logical_modules)
-    actual = Counter(_draft_module_key(module) for module in draft.document.modules)
-    missing = list((expected - actual).elements())
-    extra = list((actual - expected).elements())
+    missing, extra, _ = match_approved_modules(blueprint, draft)
     errors = []
     if missing: errors.append(f"승인된 module이 최종 문서에서 누락되었습니다: {sorted(missing)}")
     if extra: errors.append(f"승인되지 않은 module이 최종 문서에 추가되었습니다: {sorted(extra)}")

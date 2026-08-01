@@ -1,12 +1,16 @@
 """Logical architecture-role grouping for assignment modules."""
 import json
 import re
+from .service_catalog import AWS_SERVICE_CATALOG, canonical_service_name
 
 OFFICIAL_NAMES = {
     "api gateway websocket": "Amazon API Gateway", "eventbridge pipes": "Amazon EventBridge Pipes", "cloudfront functions": "CloudFront Functions", "vpc endpoint": "Amazon VPC Endpoint", "secrets manager": "AWS Secrets Manager", "network firewall": "AWS Network Firewall", "stateful rule group": "AWS Network Firewall", "firewall policy": "AWS Network Firewall", "firewall endpoint": "AWS Network Firewall", "step functions": "AWS Step Functions", "application load balancer": "Application Load Balancer", "route 53": "Amazon Route 53", "vpc lattice": "Amazon VPC Lattice", "cloudwatch": "Amazon CloudWatch", "cloudfront": "Amazon CloudFront", "dynamodb": "Amazon DynamoDB", "eventbridge": "Amazon EventBridge", "cognito": "Amazon Cognito", "lambda": "AWS Lambda", "sqs": "Amazon SQS", "sns": "Amazon SNS", "waf": "AWS WAF", "ecs": "Amazon ECS", "ecr": "Amazon ECR", "ec2": "Amazon EC2", "amazon ec2 application": "Amazon EC2", "amazon ec2 애플리케이션": "Amazon EC2", "ec2 애플리케이션": "Amazon EC2", "ec2 instance": "Amazon EC2", "alb": "Application Load Balancer", "rds": "Amazon RDS", "vpc": "Amazon VPC", "s3": "Amazon S3", "kms": "AWS KMS", "ssm": "AWS Systems Manager", "aws systems manager": "AWS Systems Manager", "systems manager": "AWS Systems Manager", "route53": "Amazon Route 53"
 }
 
 def official_service(value: str) -> str:
+    resolved = canonical_service_name(value)
+    if resolved != str(value or "").strip():
+        return resolved
     text = str(value or "").lower().strip()
     text = re.sub(r"^(amazon ec2|ec2)(?: application| 애플리케이션| instance)?$", "ec2", text)
     for key, official in sorted(OFFICIAL_NAMES.items(), key=lambda item: len(item[0]), reverse=True):
@@ -25,6 +29,9 @@ CATALOG = [
     ("Amazon SQS", "Queue", "SQS 메시지 큐", ("sqs", "message queue", "메시지 큐"), ("queue", "visibility", "retention", "dead letter", "fifo")),
     ("Amazon SNS", "Topic", "SNS topic", ("sns", "notification topic"), ("topic", "subscription", "publisher")),
     ("Amazon VPC", "VPC", "VPC 네트워크 기본 구조", ("vpc", "virtual private cloud"), ("subnet", "route table", "internet gateway", "nat gateway", "cidr")),
+    ("AWS Client VPN", "Client VPN Endpoint", "원격 사용자의 VPC 비공개 접근", ("client vpn", "aws client vpn", "클라이언트 vpn"), ("endpoint", "association", "authorization", "route", "client cidr")),
+    ("AWS Site-to-Site VPN", "VPN Connection", "외부 네트워크와 VPC의 암호화 연결", ("site-to-site vpn", "site to site vpn", "s2s vpn", "vpn connection", "사이트 간 vpn"), ("customer gateway", "tunnel", "bgp", "route propagation")),
+    ("Amazon VPC Endpoint", "Interface Endpoint", "VPC 내부 서비스 연결", ("vpc endpoint", "interface endpoint"), ("private dns", "endpoint policy")),
     ("Amazon EC2 애플리케이션", "Instance", "EC2 애플리케이션 실행 계층", ("ec2", "user data", "웹 애플리케이션", "애플리케이션 서버"), ("instance", "ami", "instance type", "user data", "security group", "application")),
     ("Amazon S3", "Bucket", "S3 객체 저장소", ("s3", "object storage", "객체 저장 버킷"), ("bucket", "object", "versioning", "lifecycle", "bucket policy")),
     ("Amazon ECR", "Repository", "ECR 이미지 리포지토리", ("ecr", "container image repository", "이미지 저장소"), ("repository", "image", "scan", "tag")),
@@ -46,6 +53,10 @@ def detect(text):
     return found
 
 def _group_for(text):
+    # VPN identities must be resolved before the generic VPC alias.
+    if any(_contains(text, x) for x in ("client vpn", "aws client vpn", "클라이언트 vpn")): return "AWS Client VPN"
+    if any(_contains(text, x) for x in ("site-to-site vpn", "site to site vpn", "s2s vpn", "vpn connection", "사이트 간 vpn")): return "AWS Site-to-Site VPN"
+    if any(_contains(text, x) for x in ("vpc endpoint", "interface endpoint")): return "Amazon VPC Endpoint"
     # Child resources are intentionally grouped by architecture role, not API resource count.
     if any(_contains(text, x) for x in ("network firewall", "stateful rule group", "firewall policy", "firewall endpoint")): return "AWS Network Firewall"
     if any(_contains(text, x) for x in ("vpc lattice", "service network", "service association")): return "Amazon VPC Lattice"
