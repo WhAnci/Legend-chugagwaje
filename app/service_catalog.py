@@ -15,6 +15,7 @@ AWS_SERVICE_CATALOG = [
  {"canonicalName":"AWS Config","aliases":["aws config","config rule"],"defaultResourceType":"Config Rule","domain":"OPERATIONS_GOVERNANCE","defaultRole":"구성 준수 감사","commonChildren":["Rule","Remediation"]},
  {"canonicalName":"AWS CloudTrail","aliases":["cloudtrail"],"defaultResourceType":"Trail","domain":"OPERATIONS_GOVERNANCE","defaultRole":"API 감사","commonChildren":["Event Selector","Log Group"]},
  {"canonicalName":"AWS Backup","aliases":["aws backup"],"defaultResourceType":"Backup Plan","domain":"OPERATIONS_GOVERNANCE","defaultRole":"백업·복구","commonChildren":["Backup Rule","Vault"]},
+ {"canonicalName":"AWS CodeDeploy","aliases":["codedeploy","code deploy","blue/green deployment","blue green deployment"],"defaultResourceType":"Deployment Group","domain":"COMPUTE_CONTAINER","defaultRole":"ECS Blue/Green 배포·트래픽 전환","commonChildren":["Application","Deployment Group","Traffic Routing","Rollback"]},
  {"canonicalName":"AWS Step Functions","aliases":["step functions","stepfunctions"],"defaultResourceType":"State Machine","domain":"INTEGRATION_WORKFLOW","defaultRole":"상태 워크플로","commonChildren":["State","Execution"]},
  {"canonicalName":"Amazon SQS","aliases":["sqs","queue"],"defaultResourceType":"Queue","domain":"INTEGRATION_WORKFLOW","defaultRole":"메시지 버퍼","commonChildren":["Policy","DLQ"]},
  {"canonicalName":"Amazon EventBridge","aliases":["eventbridge","event bus"],"defaultResourceType":"Rule","domain":"INTEGRATION_WORKFLOW","defaultRole":"이벤트 라우팅","commonChildren":["Pattern","Target"]},

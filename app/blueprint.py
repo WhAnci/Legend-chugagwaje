@@ -150,6 +150,22 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             if owner_component: existing.owner_module_id = owner_component.id
         return existing.owner_module_id or existing.id
 
+    ecs_blue_green = any(x in text for x in ("ecs blue", "blue/green", "blue green", "codedeploy", "code deploy", "블루/그린"))
+    if ecs_blue_green:
+        add_component("amazon-ecr", "Amazon ECR", "Repository", "컨테이너 이미지 저장 및 태그 관리")
+        add_component("amazon-ecs", "Amazon ECS", "Cluster/Service", "Blue/Green Task Set 실행")
+        add_component("application-load-balancer", "Application Load Balancer", "Load Balancer", "Blue/Green 트래픽 분산")
+        add_component("aws-codedeploy", "AWS CodeDeploy", "Deployment Group", "ECS Blue/Green 배포·롤백")
+        add_component("amazon-cloudwatch", "Amazon CloudWatch", "Alarm/Metric", "배포 상태·롤백 감시")
+        add_component("ecs-blue-target-group", "Application Load Balancer", "Blue Target Group", "기존 Blue 대상", "Application Load Balancer")
+        add_component("ecs-green-target-group", "Application Load Balancer", "Green Target Group", "신규 Green 대상", "Application Load Balancer")
+        add_component("ecs-production-listener", "Application Load Balancer", "Production Listener", "운영 트래픽 전환", "Application Load Balancer")
+        add_component("ecs-test-listener", "Application Load Balancer", "Test Listener", "Green 사전 검증", "Application Load Balancer")
+        add_component("ecs-task-definition", "Amazon ECS", "Task Definition", "컨테이너 이미지·포트 정의", "Amazon ECS")
+        add_component("ecs-service", "Amazon ECS", "ECS Service/Task Sets", "Blue/Green 서비스", "Amazon ECS")
+        add_component("codedeploy-rollback", "AWS CodeDeploy", "Automatic Rollback", "실패 배포 자동 복구", "AWS CodeDeploy")
+        add_component("codedeploy-alarm-connection", "AWS CodeDeploy", "Alarm Configuration", "CloudWatch Alarm 연결", "AWS CodeDeploy")
+
     lambda_component = next((c for c in components if c.service == "AWS Lambda"), None)
     s3_component = next((c for c in components if c.service == "Amazon S3"), None)
     ecr_component = next((c for c in components if c.service == "Amazon ECR"), None)
@@ -220,7 +236,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
         add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "rotation-schedule", "secrets-rotation-schedule", "secrets-rotation-configuration", "rotation-scheduler-role", "s3-event-notification", "s3-lifecycle-configuration", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "rotation-schedule", "secrets-rotation-schedule", "secrets-rotation-configuration", "rotation-scheduler-role", "s3-event-notification", "s3-lifecycle-configuration", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy", "ecs-blue-target-group", "ecs-green-target-group", "ecs-production-listener", "ecs-test-listener", "ecs-task-definition", "ecs-service", "codedeploy-rollback", "codedeploy-alarm-connection"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -307,6 +323,15 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         module.included_resources = [c.resource_type for c in components if c.id in module.component_ids]
         module.dependencies = []
     files = []
+    if ecs_blue_green:
+        files.extend([
+            BlueprintFile(path="app.py", used_by_module=["amazon-ecr", "amazon-ecs"], dependencies=["APP_VERSION", "/", "/health"]),
+            BlueprintFile(path="Dockerfile", used_by_module=["amazon-ecr"], dependencies=["app.py", "requirements.txt"]),
+            BlueprintFile(path="requirements.txt", used_by_module=["amazon-ecr"], dependencies=["flask"]),
+            BlueprintFile(path="taskdef.json", used_by_module=["amazon-ecs", "aws-codedeploy"], dependencies=["containerName", "image", "portMappings"]),
+            BlueprintFile(path="appspec.yaml", used_by_module=["aws-codedeploy"], dependencies=["TargetService", "LoadBalancerInfo"]),
+            BlueprintFile(path="deploy.sh", used_by_module=["amazon-ecr", "amazon-ecs", "aws-codedeploy"], dependencies=["docker push", "create-deployment"]),
+        ])
     if any(c.service == "AWS Lambda" for c in components) or "lambda_function.py" in text or "lambda" in text or "함수" in text:
         files.append(BlueprintFile(path="lambda_function.py", used_by_module=["aws-lambda"], dependencies=["Function", "Runtime", "Handler", "Execution Role"]))
     flows = []
@@ -314,7 +339,9 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         flows.append(DataFlow(from_node=left.strip(), to_node=right.strip(), action=(action or "request/data flow").strip()))
     for module in modules:
         module.dependencies = []
-    if any(c.service == "Amazon SQS" for c in components) and any(c.service == "AWS Lambda" for c in components):
+    if ecs_blue_green:
+        flows = [DataFlow(from_node="Developer/CI", to_node="Amazon ECR", action="Push blue/green image"), DataFlow(from_node="Amazon ECR", to_node="Amazon ECS", action="Register Task Definition"), DataFlow(from_node="Amazon ECS", to_node="AWS CodeDeploy", action="Create Deployment"), DataFlow(from_node="AWS CodeDeploy", to_node="Application Load Balancer", action="Test/Production traffic routing"), DataFlow(from_node="Application Load Balancer", to_node="Amazon ECS", action="Route to active Target Group"), DataFlow(from_node="Amazon CloudWatch", to_node="AWS CodeDeploy", action="Alarm-triggered rollback")]
+    elif any(c.service == "Amazon SQS" for c in components) and any(c.service == "AWS Lambda" for c in components):
         flows = [DataFlow(from_node="Amazon SQS", to_node="AWS Lambda", action="Event Source Mapping/ReceiveMessage"), DataFlow(from_node="AWS Lambda", to_node="Amazon DynamoDB", action="ConditionalCheck idempotency"), DataFlow(from_node="AWS Lambda", to_node="Amazon SQS DLQ", action="Redrive failed messages")]
     elif any(c.service == "Amazon S3" for c in components) and any(x in text for x in ("lifecycle", "glacier", "30일", "수명 주기")):
         flows = [DataFlow(from_node="Client", to_node="Amazon S3", action="PutObject"), DataFlow(from_node="Amazon S3", to_node="AWS Lambda", action="ObjectCreated Event Notification"), DataFlow(from_node="AWS Lambda", to_node="Amazon S3", action="Tag validation and delete invalid object"), DataFlow(from_node="Amazon S3 Lifecycle", to_node="Amazon S3 Glacier", action="Transition after 30 days")]
@@ -336,6 +363,12 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "AWS KMS" in services: fixed_specs += [{"moduleId": "aws-kms", "field": field} for field in ("Key Alias", "Key Policy", "Encryption Target")]
     if "AWS Secrets Manager" in services: fixed_specs.append({"moduleId": "aws-secrets-manager", "field": "Secret Name/ARN"})
     if "AWS Network Firewall" in services: fixed_specs += [{"moduleId": "aws-network-firewall", "field": field} for field in ("FirewallPolicy", "Stateful RuleGroup", "Firewall Subnet", "SubnetMapping", "LoggingConfiguration", "Route Table/Endpoint")]
+    if ecs_blue_green:
+        fixed_specs += [{"moduleId": "amazon-ecr", "field": field} for field in ("Repository Name", "Region", "Blue Image Tag", "Green Image Tag", "Scan on Push")]
+        fixed_specs += [{"moduleId": "application-load-balancer", "field": field} for field in ("ALB Name", "Production Listener Port", "Test Listener Port", "Blue Target Group Name", "Green Target Group Name", "Target Type", "Target Port", "Health Check Path", "Success Codes")]
+        fixed_specs += [{"moduleId": "amazon-ecs", "field": field} for field in ("Cluster Name", "Service Name", "Task Definition Family", "Launch Type", "Network Mode", "Container Name", "Container Port", "Desired Count", "Deployment Controller")]
+        fixed_specs += [{"moduleId": "aws-codedeploy", "field": field} for field in ("Application Name", "Deployment Group Name", "Compute Platform", "Blue Target Group", "Green Target Group", "Production Listener", "Test Listener", "Deployment Configuration", "Automatic Rollback Events", "Service Role")]
+        fixed_specs += [{"moduleId": "amazon-cloudwatch", "field": field} for field in ("Alarm Name", "Namespace", "Metric Name", "Threshold", "CodeDeploy Alarm Connection")]
     if "Amazon EC2" in services: fixed_specs += [{"moduleId": "amazon-ec2", "field": field} for field in ("Subnet", "Security Group", "Instance Profile", "User Data")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Partition Key", "DynamoDB Access Policy")]
     if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("AWS_REGION Environment Variable", "Event Source Mapping", "DLQ/RedrivePolicy")]
@@ -363,6 +396,12 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         behavior_checks.append({"type": "s3_lambda_e2e", "description": "S3 테스트 객체 업로드 → Event Notification → Lambda 처리/Checksum 검증 → 성공·실패 객체 분기 → CloudWatch 로그 확인"})
     if any(c.service == "Amazon S3" for c in components) and any(x in text for x in ("lifecycle", "glacier", "30일", "수명 주기")):
         behavior_checks.append({"type": "s3_lifecycle", "description": "태그 조건 객체 업로드 → Lambda 검증/삭제 → 30일 후 S3 Lifecycle의 Glacier 전환 검증"})
+    if ecs_blue_green:
+        behavior_checks.extend([
+            {"type": "deployment", "description": "ECR에 blue/green 이미지가 존재하고 ECS DeploymentController가 CODE_DEPLOY인지 확인"},
+            {"type": "traffic", "description": "ALB의 Blue/Green Target Group과 Listener를 확인하고 응답이 BLUE에서 GREEN으로 전환되는지 검증"},
+            {"type": "rollback", "description": "CloudWatch Alarm 발생 시 CodeDeploy가 배포를 중단하고 이전 Task Set으로 자동 롤백하는지 검증"},
+        ])
     if any(c.service == "AWS Network Firewall" for c in components): behavior_checks.append({"type": "network_behavior", "description": "EC2에서 허용 도메인과 차단 도메인으로 실제 트래픽을 전송하고 Firewall Endpoint 경유·허용/차단·Alert 로그를 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
     goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())

@@ -84,7 +84,30 @@ def _complete_event_bundle(raw, draft):
     data["document"] = document
     return TaskDraft.model_validate(data)
 
+ECS_BG_FILES = {
+    "app.py": "import os\nfrom flask import Flask\napp=Flask(__name__)\n@app.get('/')\ndef index(): return os.getenv('APP_VERSION','BLUE')\n@app.get('/health')\ndef health(): return 'OK', 200\n",
+    "Dockerfile": "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY app.py .\nCMD [\"python\", \"app.py\"]\n",
+    "requirements.txt": "flask\n",
+    "taskdef.json": "{\"family\":\"ecs-bg-task\",\"containerDefinitions\":[{\"name\":\"app\",\"image\":\"IMAGE_URI\",\"portMappings\":[{\"containerPort\":5000}]}]}\n",
+    "appspec.yaml": "version: 0.0\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: TASK_DEFINITION_ARN\n        LoadBalancerInfo:\n          ContainerName: app\n          ContainerPort: 5000\n",
+    "deploy.sh": "#!/usr/bin/env bash\nset -Eeuo pipefail\n# Build/push image, register task definition, and create CodeDeploy deployment.\n"
+}
+
+def _complete_ecs_blue_green(raw, draft):
+    text = raw.lower()
+    if not ("ecs" in text and ("blue" in text or "블루" in text) and ("codedeploy" in text or "code deploy" in text)): return draft
+    data=draft.model_dump(mode="json"); document=data.get("document") or {}; modules=document.setdefault("modules", [])
+    profile=[("Amazon ECR","Repository","ECR 이미지 저장 및 태그 관리",[("Repository Name","ecs-bg-repo"),("Blue Image Tag","blue"),("Green Image Tag","green"),("Scan on Push","Enabled")]),("Application Load Balancer","LoadBalancer","Blue/Green 트래픽 분산",[("Production Listener Port","80"),("Test Listener Port","8080"),("Blue Target Group Name","ecs-bg-blue-tg"),("Green Target Group Name","ecs-bg-green-tg"),("Target Port","5000"),("Health Check Path","/health")]),("Amazon ECS","Service","ECS Blue/Green Task Set 실행",[("Cluster Name","ecs-bg-cluster"),("Service Name","ecs-bg-service"),("Container Name","app"),("Container Port","5000"),("Deployment Controller","CODE_DEPLOY")]),("AWS CodeDeploy","DeploymentGroup","ECS 트래픽 전환 및 롤백",[("Application Name","ecs-bg-application"),("Deployment Group Name","ecs-bg-deployment-group"),("Compute Platform","ECS"),("Automatic Rollback Events","DEPLOYMENT_FAILURE, DEPLOYMENT_STOP_ON_ALARM")]),("Amazon CloudWatch","Alarm","배포 실패 감지",[("Alarm Name","ecs-bg-deployment-alarm"),("Metric Name","HTTPCode_Target_5XX_Count"),("Threshold","1")])]
+    for service, resource, description, specs in profile:
+        if not any(service.lower() in str(m).lower() for m in modules): modules.append({"service":service,"title":service,"resourceType":resource,"description":description,"fixedSpecs":[{"label":k,"value":v} for k,v in specs]})
+    document["modules"]=modules; data["document"]=document
+    files=data.setdefault("deployment_files", [])
+    for path, content in ECS_BG_FILES.items():
+        if not any(str(f.get("path", "")) == path for f in files if isinstance(f,dict)): files.append({"path":path,"content":content,"usedByModule":["amazon-ecr","amazon-ecs"] if path in {"app.py","Dockerfile","requirements.txt"} else ["aws-codedeploy"]})
+    return TaskDraft.model_validate(data)
+
 def complete_assignment(raw: str, draft: TaskDraft) -> TaskDraft:
+    draft = _complete_ecs_blue_green(raw, draft)
     if _secret_requested(raw): return _complete_secret_bundle(raw, draft)
     if _event_requested(raw): return _complete_event_bundle(raw, draft)
     if not (_has(raw, "vpc") and _has(raw, "ec2") and (_has(raw, "alb") or _has(raw, "elb"))): return draft
