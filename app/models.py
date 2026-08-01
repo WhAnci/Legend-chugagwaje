@@ -395,6 +395,20 @@ class TaskDraft(BaseModel):
             data["assignment_markdown"] = re.sub(r"cloud\s*shell", "채점 실행 환경", data["assignment_markdown"], flags=re.I)
         return data
 
+def align_modules_to_approved_blueprint(draft: TaskDraft, approved_blueprint) -> TaskDraft:
+    """Preserve approved module IDs while allowing human-friendly generated titles."""
+    if not draft.document or not approved_blueprint: return draft
+    approved = {}
+    for module in approved_blueprint.logical_modules:
+        approved[official_service(module.title).strip().casefold()] = (module.id, module.title)
+    for module in draft.document.modules:
+        key = official_service(module.primary_service or module.service or module.title or module.id).strip().casefold()
+        if key in approved:
+            module.id, official_title = approved[key]
+            module.service = official_title
+            module.primary_service = official_title
+    return draft
+
 class ValidationResult(BaseModel):
     ok: bool
     errors: list[str] = Field(default_factory=list)

@@ -1,5 +1,7 @@
 """Pre-generation assignment blueprint and deterministic structural review."""
 import json, re
+from collections import Counter
+from .module_decomposition import official_service
 from pydantic import BaseModel, ConfigDict, Field
 from .models import TaskDraft, TaskRequest
 from .service_catalog import AWS_SERVICE_CATALOG
@@ -435,12 +437,25 @@ def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
         if file.path.endswith("lambda_function.py") and not any(c.service == "AWS Lambda" for c in blueprint.components): errors.append("Lambda 지급파일이 있지만 Lambda component가 없습니다.")
     return errors
 
+def _blueprint_module_key(module):
+    value = module.title or module.id
+    return official_service(value).strip().casefold()
+
+def _draft_module_key(module):
+    value = module.primary_service or module.service or module.title or module.id
+    return official_service(value).strip().casefold()
+
 def check_approved_modules(blueprint: AssignmentBlueprint, draft: TaskDraft) -> list[str]:
-    expected = {module.title.lower() for module in blueprint.logical_modules}
-    actual = {module.title.lower() for module in (draft.document.modules if draft.document else [])}
-    missing = expected - actual
-    extra = actual - expected
-    return ([f"승인된 module이 최종 문서에서 누락되었습니다: {sorted(missing)}"] if missing else []) + ([f"승인되지 않은 module이 최종 문서에 추가되었습니다: {sorted(extra)}"] if extra else [])
+    if not draft.document:
+        return ["승인 Blueprint와 비교할 최종 document가 없습니다."]
+    expected = Counter(_blueprint_module_key(module) for module in blueprint.logical_modules)
+    actual = Counter(_draft_module_key(module) for module in draft.document.modules)
+    missing = list((expected - actual).elements())
+    extra = list((actual - expected).elements())
+    errors = []
+    if missing: errors.append(f"승인된 module이 최종 문서에서 누락되었습니다: {sorted(missing)}")
+    if extra: errors.append(f"승인되지 않은 module이 최종 문서에 추가되었습니다: {sorted(extra)}")
+    return errors
 
 def review_generated_draft(blueprint: AssignmentBlueprint, draft: TaskDraft) -> list[str]:
     errors = []

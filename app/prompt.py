@@ -157,6 +157,11 @@ def make_prompt(req: TaskRequest, include_references: bool = True, include_syste
 - 이전 초안(검증 오류가 있을 때만 제공):
 {req.previous_draft or '(없음. 새로 작성)'}
 
+[승인된 Blueprint 계약]
+{req.approved_blueprint or '(승인된 Blueprint 없음)'}
+
+승인된 Blueprint가 존재하면 document.modules는 승인된 logicalModules와 동일한 공식 서비스 identity 집합을 사용한다. 승인 module을 생략하거나 승인되지 않은 독립 module을 추가하지 않는다. 각 module의 id는 승인 Blueprint의 module id를 그대로 사용하고, primaryService/service는 공식 AWS 서비스명과 일치시킨다. 제목 표현이 달라도 공식 서비스 identity는 변경하지 않는다. 하위 리소스는 includedResources에 포함하고 역할 설명은 subtitle, role, description에 작성한다. 승인 module마다 description, fixedSpecs, grading check를 생성한다.
+
 재시도 요청에서는 이전 JSON이나 modules를 재사용하지 말고, 새 candidate를 처음부터 생성한다. 재시도 지시에는 검증 오류 메시지만 반영한다. 이전 candidate를 append, merge, 직접 수정하지 않는다.
 
 최종 출력은 위 JSON 스키마만 반환한다. Markdown은 과제지/채점기준표로 바로 PDF 변환할 수 있도록 제목, 표, 코드블록을 사용한다. PDF 과제지는 예시처럼 깔끔한 실습 안내서 형태여야 한다. 제목과 번호 항목을 명확히 구분하고 항목 사이에 여백을 둔다. 표지·리소스 사양 표·제출물·제한사항/비용·리소스 정리 순서는 넣지 않는다. 본문은 짧은 문단과 `Name : value`, bullet, 코드블록만 사용한다. 표·카드·과도한 색상 장식·긴 한 줄 텍스트는 사용하지 않는다. 채점기준표에는 총점/리전/CloudShell 안내, 인프라 구성과 동작 검증을 구분한 표, 항목별 배점·판정·부분점수·기대 출력 예시를 포함한다. 배포 파일이 불필요하면 deployment_files를 빈 배열로 반환한다. JSON 문자열 안의 줄바꿈과 따옴표는 유효한 JSON으로 이스케이프한다. 생성 전에 요구사항의 AWS 서비스·리소스·이름·연결 관계를 분석하고, 독립 채점 단위별로 modules를 만든 뒤 JSON을 반환하라."""

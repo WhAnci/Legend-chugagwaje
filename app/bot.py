@@ -18,6 +18,7 @@ from . import ai_control
 from .completeness import complete_assignment
 from .blueprint import AssignmentBlueprint, check_approved_modules, create_blueprint, validate_blueprint
 from .revision import normalize_issues, repair_references
+from .models import align_modules_to_approved_blueprint
 from .opencode import review_blueprint
 
 load_dotenv()
@@ -89,9 +90,17 @@ async def create_job(raw: str, approved_blueprint: AssignmentBlueprint | None = 
         logger.info("generation attempt=%d started", _ + 1)
         draft = complete_assignment(raw, normalize(await generate(current)))
         if approved_blueprint:
+            draft = align_modules_to_approved_blueprint(draft, approved_blueprint)
+        if approved_blueprint:
             approved_errors = check_approved_modules(approved_blueprint, draft)
             if approved_errors:
                 draft.notes = "BLUEPRINT_APPROVAL_ERRORS: " + " | ".join(approved_errors)
+                # Alias/title and ID differences are normalized above; only genuine
+                # canonical missing/extra modules are sent to one retry.
+                if _ == 0:
+                    logger.warning("approved module genuinely mismatched: %s", approved_errors)
+                else:
+                    raise GeminiError("동일한 승인 Blueprint module 불일치가 반복되었습니다: " + "; ".join(approved_errors))
         logger.info("generation attempt=%d returned title=%s", _ + 1, draft.title)
         result = validate(draft)
         if result.ok:

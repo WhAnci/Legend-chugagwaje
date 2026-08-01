@@ -3,11 +3,12 @@ import json
 import re
 
 OFFICIAL_NAMES = {
-    "api gateway websocket": "Amazon API Gateway", "eventbridge pipes": "Amazon EventBridge Pipes", "cloudfront functions": "CloudFront Functions", "vpc endpoint": "Amazon VPC Endpoint", "secrets manager": "AWS Secrets Manager", "network firewall": "AWS Network Firewall", "stateful rule group": "AWS Network Firewall", "firewall policy": "AWS Network Firewall", "firewall endpoint": "AWS Network Firewall", "step functions": "AWS Step Functions", "application load balancer": "Application Load Balancer", "route 53": "Amazon Route 53", "vpc lattice": "Amazon VPC Lattice", "cloudwatch": "Amazon CloudWatch", "cloudfront": "Amazon CloudFront", "dynamodb": "Amazon DynamoDB", "eventbridge": "Amazon EventBridge", "cognito": "Amazon Cognito", "lambda": "AWS Lambda", "sqs": "Amazon SQS", "sns": "Amazon SNS", "waf": "AWS WAF", "ecs": "Amazon ECS", "ecr": "Amazon ECR", "ec2": "Amazon EC2", "alb": "Application Load Balancer", "rds": "Amazon RDS", "vpc": "Amazon VPC", "s3": "Amazon S3", "kms": "AWS KMS", "ssm": "AWS Systems Manager", "route53": "Amazon Route 53"
+    "api gateway websocket": "Amazon API Gateway", "eventbridge pipes": "Amazon EventBridge Pipes", "cloudfront functions": "CloudFront Functions", "vpc endpoint": "Amazon VPC Endpoint", "secrets manager": "AWS Secrets Manager", "network firewall": "AWS Network Firewall", "stateful rule group": "AWS Network Firewall", "firewall policy": "AWS Network Firewall", "firewall endpoint": "AWS Network Firewall", "step functions": "AWS Step Functions", "application load balancer": "Application Load Balancer", "route 53": "Amazon Route 53", "vpc lattice": "Amazon VPC Lattice", "cloudwatch": "Amazon CloudWatch", "cloudfront": "Amazon CloudFront", "dynamodb": "Amazon DynamoDB", "eventbridge": "Amazon EventBridge", "cognito": "Amazon Cognito", "lambda": "AWS Lambda", "sqs": "Amazon SQS", "sns": "Amazon SNS", "waf": "AWS WAF", "ecs": "Amazon ECS", "ecr": "Amazon ECR", "ec2": "Amazon EC2", "amazon ec2 application": "Amazon EC2", "amazon ec2 애플리케이션": "Amazon EC2", "ec2 애플리케이션": "Amazon EC2", "ec2 instance": "Amazon EC2", "alb": "Application Load Balancer", "rds": "Amazon RDS", "vpc": "Amazon VPC", "s3": "Amazon S3", "kms": "AWS KMS", "ssm": "AWS Systems Manager", "aws systems manager": "AWS Systems Manager", "systems manager": "AWS Systems Manager", "route53": "Amazon Route 53"
 }
 
 def official_service(value: str) -> str:
-    text = str(value or "").lower()
+    text = str(value or "").lower().strip()
+    text = re.sub(r"^(amazon ec2|ec2)(?: application| 애플리케이션| instance)?$", "ec2", text)
     for key, official in sorted(OFFICIAL_NAMES.items(), key=lambda item: len(item[0]), reverse=True):
         if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", text): return official
     return str(value or "").strip()
