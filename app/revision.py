@@ -7,7 +7,7 @@ from .blueprint import AssignmentBlueprint
 class ValidationIssue:
     error_type: str
     component_id: str = ""
-    json_path: str = "$
+    json_path: str = "$"
     current_value: object = None
     expected_condition: str = ""
     required_action: str = ""
@@ -21,7 +21,7 @@ def normalize_issues(values) -> list[dict]:
     result = []
     for value in values or []:
         if isinstance(value, dict):
-            result.append({"errorType": value.get("errorType", value.get("issue", value.get("category", "ReviewerIssue"))), "componentId": value.get("componentId", value.get("component", "")), "jsonPath": value.get("jsonPath", "$"), "currentValue": value.get("currentValue"), "expectedCondition": value.get("expectedCondition", value.get("detail", "")), "requiredAction": value.get("requiredAction", value.get("description", "")), "severity": value.get("severity", "error"), "description": value.get("description", value.get("detail", ""))})
+            result.append({"errorType": value.get("errorType", value.get("issue", value.get("category", "ReviewerIssue"))), "componentId": value.get("componentId", value.get("component", "")), "jsonPath": value.get("jsonPath", "$"), "currentValue": value.get("currentValue"), "expectedCondition": value.get("expectedCondition", value.get("detail", "")), "requiredAction": value.get("requiredAction", value.get("description", "")), "severity": value.get("severity", "error"), "requirementId": value.get("requirementId", ""), "evidence": value.get("evidence"), "description": value.get("description", value.get("detail", ""))})
         else:
             result.append({"errorType": "ReviewerIssue", "componentId": "", "jsonPath": "$", "currentValue": None, "expectedCondition": str(value), "requiredAction": str(value), "severity": "warning", "description": str(value)})
     return result

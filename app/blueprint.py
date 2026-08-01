@@ -17,6 +17,12 @@ class BlueprintComponent(BlueprintModel):
     role: str
     required: bool = True
     configured_by_candidate: bool = True
+    requirement_source: str = "inferred-required"
+    reason: str = ""
+    included_resources: list[str] = Field(default_factory=list)
+    configurations: dict = Field(default_factory=dict)
+    environment_variables: list[dict] = Field(default_factory=list)
+    permission_specs: list[dict] = Field(default_factory=list)
 
 class BlueprintModule(BlueprintModel):
     id: str
@@ -35,6 +41,7 @@ class DataFlow(BlueprintModel):
     from_node: str
     to_node: str
     action: str
+    condition: str = ""
 
 class AssignmentBlueprint(BlueprintModel):
     goal: str
@@ -43,6 +50,8 @@ class AssignmentBlueprint(BlueprintModel):
     logical_modules: list[BlueprintModule] = Field(default_factory=list)
     provided_files: list[BlueprintFile] = Field(default_factory=list)
     fixed_specs: list[dict] = Field(default_factory=list)
+    permission_specs: list[dict] = Field(default_factory=list)
+    requirements: list[dict] = Field(default_factory=list)
     behavior_checks: list[dict] = Field(default_factory=list)
     dependencies: list[dict] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
@@ -104,6 +113,9 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             if not any(component.service == service for component in components):
                 resource, role = {"Amazon ECR": ("Repository", "이미지 저장·검사"), "Amazon EventBridge": ("Rule", "이벤트 라우팅"), "Amazon Route 53": ("DNS", "DNS 장애 전환"), "AWS IAM": ("Policy/Role", "접근 제어")}.get(service, ("Resource", "아키텍처 구성요소"))
                 components.append(BlueprintComponent(id=re.sub(r"[^a-z0-9]+", "-", service.lower()).strip("-"), service=service, resource_type=resource, role=role))
+    for component in components:
+        component.requirement_source = "user"
+        component.reason = "사용자 요청 또는 주제 후보에 명시된 구성요소"
     # Difficulty revision may add a directly related module without changing the original topic.
     # The additions are bounded to one or two supporting roles and are reviewed again.
     if any(token in text for token in ("난이도를 높", "난이도 높", "보안·실패", "보강")):
@@ -287,18 +299,22 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "AWS Network Firewall" in services: fixed_specs += [{"moduleId": "aws-network-firewall", "field": field} for field in ("FirewallPolicy", "Stateful RuleGroup", "Firewall Subnet", "SubnetMapping", "LoggingConfiguration", "Route Table/Endpoint")]
     if "Amazon EC2" in services: fixed_specs += [{"moduleId": "amazon-ec2", "field": field} for field in ("Subnet", "Security Group", "Instance Profile", "User Data")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Partition Key", "DynamoDB Access Policy")]
-    if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("SQS Queue URL/ARN Environment Variable", "AWS_REGION Environment Variable", "Event Source Mapping", "SQS Receive/Delete Permissions", "DLQ/RedrivePolicy")]
+    if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("AWS_REGION Environment Variable", "Event Source Mapping", "DLQ/RedrivePolicy")]
     if "Amazon S3" in services:
         fixed_specs += [{"moduleId": "amazon-s3", "field": field} for field in ("Bucket Name/Pattern", "Region", "Versioning", "Public Access Block", "Encryption")]
     if "Amazon S3" in services and any(c.id == "s3-lifecycle-configuration" for c in components):
         fixed_specs += [{"moduleId": "amazon-s3", "field": field} for field in ("Lifecycle Rule", "Transition After: 30 days", "Storage Class: Glacier")]
     if "Amazon S3" in services and "AWS Lambda" in services:
-        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("BUCKET_NAME Environment Variable", "LOG_LEVEL Environment Variable", "VALID_TAG_KEY Environment Variable", "S3 Object Trigger", "Handler", "S3 Invoke Permission")]
+        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("BUCKET_NAME Environment Variable", "LOG_LEVEL Environment Variable", "VALID_TAG_KEY Environment Variable", "S3 Object Trigger", "Handler")]
         fixed_specs += [{"moduleId": "amazon-s3", "field": field} for field in ("Event Type: s3:ObjectCreated:*", "Lambda Target ARN", "Object Key Filters")]
-        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("Invoke Principal: s3.amazonaws.com", "Source Bucket ARN", "Action: lambda:InvokeFunction")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Idempotency Key", "Status Field", "TTL", "ConditionalCheck Permission")]
     if "Amazon SNS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": "SNS_TOPIC_ARN Environment Variable"}, {"moduleId": "amazon-sns", "field": "Topic ARN/Name"}]
     dependencies = [{"from": flow.from_node, "to": flow.to_node, "action": flow.action} for flow in flows]
+    permission_specs = []
+    if "Amazon SQS" in services and "AWS Lambda" in services:
+        permission_specs.append({"principal": "lambda-execution-role", "actions": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], "resources": ["${mainQueueArn}"], "source": "inferred-required"})
+    if "Amazon S3" in services and "AWS Lambda" in services:
+        permission_specs.append({"principal": "s3.amazonaws.com", "actions": ["lambda:InvokeFunction"], "resources": ["${sourceBucketArn}"], "source": "inferred-required"})
     for module in modules:
         module.fixed_specs = [spec for spec in fixed_specs if spec.get("moduleId") == module.id]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
@@ -311,7 +327,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if any(c.service == "AWS Network Firewall" for c in components): behavior_checks.append({"type": "network_behavior", "description": "EC2에서 허용 도메인과 차단 도메인으로 실제 트래픽을 전송하고 Firewall Endpoint 경유·허용/차단·Alert 로그를 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
     goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())
-    return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, fixed_specs=fixed_specs, dependencies=dependencies, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
+    return AssignmentBlueprint(goal=goal, data_flow=flows, components=components, logical_modules=modules, provided_files=files, fixed_specs=fixed_specs, permission_specs=permission_specs, dependencies=dependencies, behavior_checks=behavior_checks, risks=["권한·정책·실제 동작 검증 누락", "지급파일과 배포 리소스 불일치"])
 
 def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     errors = []
@@ -321,6 +337,12 @@ def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     if missing: errors.append(f"Blueprint 구성요소가 module에 매핑되지 않았습니다: {sorted(missing)}")
     if not blueprint.goal.strip(): errors.append("Blueprint goal이 비어 있습니다.")
     if len(blueprint.components) >= 2 and not blueprint.data_flow: errors.append("Blueprint dataFlow가 없습니다.")
+    for flow in blueprint.data_flow:
+        action = flow.action.lower()
+        if any(word in action for word in ("추가하라", "수정하라", "명시하라", "must add", "should add")):
+            errors.append("dataFlow에 revision 지시문이 포함되어 있습니다.")
+        if "iam" in flow.from_node.lower() or "iam" in flow.to_node.lower():
+            errors.append("IAM Role/Policy는 dataFlow 실행 노드가 될 수 없습니다.")
     for file in blueprint.provided_files:
         if not file.used_by_module: errors.append(f"지급파일 사용 module이 없습니다: {file.path}")
         if file.path.endswith("lambda_function.py") and not any(c.service == "AWS Lambda" for c in blueprint.components): errors.append("Lambda 지급파일이 있지만 Lambda component가 없습니다.")

@@ -17,6 +17,7 @@ from .usage import summary as usage_summary, links as usage_links
 from . import ai_control
 from .completeness import complete_assignment
 from .blueprint import AssignmentBlueprint, check_approved_modules, create_blueprint, validate_blueprint
+from .revision import normalize_issues
 from .opencode import review_blueprint
 
 load_dotenv()
@@ -339,7 +340,19 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
         if not errors and os.getenv("REQUIRE_OPENCODE_BLUEPRINT_REVIEW", "true").lower() == "true" and ai_control.backend() != "gemini":
             try:
                 await message.edit(content=f"🔍 OpenCode가 과제 구성안을 검토하고 있습니다... (검토 {revision + 1}/2)", embed=None, view=None)
-                errors.extend(await review_blueprint(blueprint))
+                review_items = normalize_issues(await review_blueprint(blueprint))
+                blocking = [item for item in review_items if item.get("severity") in {"critical", "major", "error"} and (item.get("requirementId") or item.get("evidence"))]
+                recommendations = [item for item in review_items if item not in blocking]
+                if recommendations:
+                    reviewer_warning = "Reviewer 권장사항 " + str(len(recommendations)) + "건은 생성 차단 없이 기록했습니다."
+                errors.extend([item.get("description") or item.get("requiredAction") or item.get("errorType") for item in blocking])
+                if errors:
+                    from .revision import deterministic_autofix
+                    repaired, resolved = deterministic_autofix(blueprint, review_items)
+                    if resolved:
+                        blueprint = repaired
+                        errors = []
+                        reviewer_warning = "결정적 자동 보정 적용: " + ", ".join(resolved)
             except Exception as exc:
                 # OpenCode provider 장애는 Blueprint 결함이 아니다. 정적 검증으로 계속 진행한다.
                 reviewer_warning = f"OpenCode Reviewer 일시 unavailable: {str(exc) or type(exc).__name__}"
