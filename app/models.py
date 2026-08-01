@@ -417,7 +417,7 @@ def complete_missing_approved_modules(draft: TaskDraft, approved_blueprint, miss
     existing_ids = {m.id for m in modules}
     for blueprint_module in approved_blueprint.logical_modules:
         if blueprint_module.id not in missing or blueprint_module.id in existing_ids: continue
-        specs = list(blueprint_module.fixed_specs)
+        specs = [{"label": str(spec.get("label", spec.get("field", "설정"))), "value": str(spec.get("value", spec.get("field", "")))} for spec in blueprint_module.fixed_specs if isinstance(spec, dict)]
         if blueprint_module.id == "amazon-cloudwatch":
             specs = [{"label": label, "value": value} for label, value in [
                 ("Alarm Name", "deployment-alarm"), ("Namespace", "AWS/ApplicationELB"),
