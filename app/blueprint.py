@@ -23,6 +23,7 @@ class BlueprintComponent(BlueprintModel):
     configurations: dict = Field(default_factory=dict)
     environment_variables: list[dict] = Field(default_factory=list)
     permission_specs: list[dict] = Field(default_factory=list)
+    owner_module_id: str = ""
 
 class BlueprintModule(BlueprintModel):
     id: str
@@ -101,7 +102,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     # Reviewer 오류는 사용자 요구 서비스가 아니므로 phantom module을 만들지 않는다.
     text = text.split("blueprint 자동 수정 지시", 1)[0]
     scheduler_requested = any(x in text for x in ("eventbridge scheduler", "scheduler", "스케줄러"))
-    architecture_mode = {"type": "EVENTBRIDGE_SCHEDULER_ROTATION" if scheduler_requested else "NATIVE_SECRETS_MANAGER_ROTATION" if "secrets manager" in text or "secret" in text else "UNSPECIFIED", "reason": "사용자 요청에 Scheduler가 명시됨" if scheduler_requested else "Secrets Manager 기본 Rotation 방식"}
+    rotation_requested = "secrets manager" in text or "secret rotation" in text or "자동 교체" in text
+    architecture_mode = {"type": "EVENTBRIDGE_SCHEDULER_ROTATION" if scheduler_requested else "NATIVE_SECRETS_MANAGER_ROTATION" if rotation_requested else "UNSPECIFIED", "reason": "사용자 요청에 Scheduler가 명시됨" if scheduler_requested else "Secrets Manager Rotation 요구" if rotation_requested else "특정 Rotation 방식 없음"}
     components = []
     for service, hints, resource, role in SERVICE_HINTS:
         if any((re.search(rf"(?<![a-z0-9]){re.escape(hint.lower())}(?![a-z0-9])", text) if re.fullmatch(r"[a-z0-9 -]+", hint.lower()) else hint.lower() in text) for hint in hints):
@@ -134,17 +136,16 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
 
     # Architecture closure: infer mandatory execution, event, permission and policy components
     # before showing the proposal. A primary service alone is never considered complete.
-    def add_component(component_id, service, resource_type, role, module_service=None):
+    def add_component(component_id, service, resource_type, role, module_service=None, owner_service=None):
         existing = next((c for c in components if c.id == component_id), None)
         if not existing:
-            components.append(BlueprintComponent(id=component_id, service=service, resource_type=resource_type, role=role))
-        owner = module_service or service
-        owner_component = next((c for c in components if c.service == owner), None)
-        if owner_component:
-            owner_id = owner_component.id
-        else:
-            owner_id = component_id
-        return owner_id
+            existing = BlueprintComponent(id=component_id, service=service, resource_type=resource_type, role=role)
+            components.append(existing)
+        owner = module_service or owner_service
+        if owner:
+            owner_component = next((c for c in components if c.service.lower() == owner.lower() or c.id == owner), None)
+            if owner_component: existing.owner_module_id = owner_component.id
+        return existing.owner_module_id or existing.id
 
     lambda_component = next((c for c in components if c.service == "AWS Lambda"), None)
     s3_component = next((c for c in components if c.service == "Amazon S3"), None)
@@ -284,6 +285,21 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         elif component.id == "eventbridge-scan-rule":
             owner = next((m for m in modules if m.title == "Amazon EventBridge"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+    # Generic ownership pass: ownerModuleId is the source of truth for every child component.
+    module_by_id = {module.id: module for module in modules}
+    for component in components:
+        owner_id = component.owner_module_id or component.id
+        owner = module_by_id.get(owner_id)
+        if owner is None:
+            candidates = [module for module in modules if module.title.lower() == component.service.lower()]
+            if len(candidates) == 1:
+                owner = candidates[0]; component.owner_module_id = owner.id
+            elif len(candidates) == 0 and not component.owner_module_id:
+                owner = BlueprintModule(id=component.id, title=component.service, component_ids=[])
+                modules.append(owner); module_by_id[owner.id] = owner
+            else:
+                continue
+        if component.id not in owner.component_ids: owner.component_ids.append(component.id)
     for module in modules:
         module.included_resources = [c.resource_type for c in components if c.id in module.component_ids]
         module.dependencies = []
@@ -301,10 +317,13 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         flows = [DataFlow(from_node="Client", to_node="Amazon S3", action="PutObject"), DataFlow(from_node="Amazon S3", to_node="AWS Lambda", action="ObjectCreated Event Notification"), DataFlow(from_node="AWS Lambda", to_node="Amazon S3", action="Tag validation and delete invalid object"), DataFlow(from_node="Amazon S3 Lifecycle", to_node="Amazon S3 Glacier", action="Transition after 30 days")]
     elif any(c.service == "Amazon S3" for c in components) and any(c.service == "AWS Lambda" for c in components):
         flows = [DataFlow(from_node="Amazon S3", to_node="AWS Lambda", action="ObjectCreated Event Notification"), DataFlow(from_node="AWS Lambda", to_node="Amazon SNS", action="Publish"), DataFlow(from_node="AWS Lambda", to_node="Amazon CloudWatch", action="Logs")]
+    elif any(c.service == "Amazon API Gateway" for c in components) and any(c.service == "AWS Lambda" for c in components):
+        flows = [DataFlow(from_node="Amazon API Gateway", to_node="AWS Lambda", action="Lambda Integration/Invoke Permission")]
     elif any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")):
         flows = [DataFlow(from_node="Amazon EventBridge Scheduler", to_node="AWS Lambda Rotation", action="Scheduled invocation"), DataFlow(from_node="AWS Lambda Rotation", to_node="AWS Secrets Manager", action="RotateSecret/GetSecretValue"), DataFlow(from_node="AWS Lambda Rotation", to_node="Amazon CloudWatch", action="Audit and failure logs")]
-    elif not flows and len(components) >= 2:
-        flows = [DataFlow(from_node=components[i].service, to_node=components[i + 1].service, action="configured integration") for i in range(len(components) - 1)]
+    elif not flows and len([c for c in components if c.service not in {"AWS IAM", "Amazon CloudWatch"}]) >= 2:
+        flow_components = [c for c in components if c.service not in {"AWS IAM", "Amazon CloudWatch"}]
+        flows = [DataFlow(from_node=flow_components[i].service, to_node=flow_components[i + 1].service, action="configured integration") for i in range(len(flow_components) - 1)]
     for module in modules:
         module.dependencies = [f"{flow.from_node} -> {flow.to_node}: {flow.action}" for flow in flows if any(module.title.lower() in node.lower() for node in (flow.from_node, flow.to_node))]
     fixed_specs = []

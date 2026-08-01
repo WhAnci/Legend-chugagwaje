@@ -37,6 +37,13 @@ def repair_references(blueprint: AssignmentBlueprint) -> tuple[AssignmentBluepri
             candidates = [m for m in result.logical_modules if module_id.split("-")[-1] in m.title.lower() or module_id.replace("-", " ") in m.title.lower()]
             if len(candidates) == 1:
                 spec["moduleId"] = candidates[0].id; repairs.append(f"fixedSpec.moduleId: {module_id} -> {candidates[0].id}")
+    for component in result.components:
+        if component.owner_module_id and component.owner_module_id not in module_ids:
+            candidates = [m for m in result.logical_modules if m.title.lower() == component.service.lower()]
+            if len(candidates) == 1:
+                component.owner_module_id = candidates[0].id; repairs.append(f"component.ownerModuleId: {component.id} -> {candidates[0].id}")
+            else:
+                repairs.append(f"unresolved component owner: {component.id}")
     return result, repairs
 
 def deterministic_autofix(blueprint: AssignmentBlueprint, issues: list[dict]) -> tuple[AssignmentBlueprint, list[str]]:
