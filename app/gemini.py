@@ -119,6 +119,13 @@ AI, IoT, 게임, IAM Identity Center는 제외한다. supportingServices는 2~4�
                 })
             valid = filter_topic_candidates(values, previous or [])
             if len(valid) >= 3: return valid[:3]
+            # Keep valid Gemini candidates and fill only the missing slots.
+            logger.warning("topic candidates partially valid: passed=%d requested=3", len(valid))
+            recent_titles = {x.get("title") for x in (previous or []) if isinstance(x, dict)}
+            used_titles = {x.get("title") for x in valid}
+            pool = [x for x in FALLBACK_TOPIC_POOL if x.get("title") not in recent_titles and x.get("title") not in used_titles]
+            valid.extend(pool[:max(0, 3 - len(valid))])
+            if len(valid) >= 3: return valid[:3]
             raise ValueError("3개 logical module과 다양성 검증을 통과한 후보가 부족합니다")
     except Exception as exc:
         logger.warning("topic suggestion failed; using deterministic fallback: %s", str(exc)[:300])
@@ -128,6 +135,7 @@ AI, IoT, 게임, IAM Identity Center는 제외한다. supportingServices는 2~4�
     fallback = list(FALLBACK_TOPIC_POOL)
     recent_titles = {x.get("title") for x in (previous or []) if isinstance(x, dict)}
     available = [x for x in fallback if x.get("title") not in recent_titles]
+    logger.warning("topic fallback selected: passed=0 fallback_count=%d", min(3, len(available)))
     return available[:3] if len(available) >= 3 else fallback[:3]
 
 async def review_draft(raw: str, draft) -> list[str]:

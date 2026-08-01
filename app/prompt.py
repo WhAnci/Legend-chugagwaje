@@ -160,7 +160,7 @@ def make_prompt(req: TaskRequest, include_references: bool = True, include_syste
 [승인된 Blueprint 계약]
 {req.approved_blueprint or '(승인된 Blueprint 없음)'}
 
-승인된 Blueprint가 존재하면 document.modules는 승인된 logicalModules와 동일한 공식 서비스 identity 집합을 사용한다. 승인 module을 생략하거나 승인되지 않은 독립 module을 추가하지 않는다. 각 module의 id는 승인 Blueprint의 module id를 그대로 사용하고, primaryService/service는 공식 AWS 서비스명과 일치시킨다. 제목 표현이 달라도 공식 서비스 identity는 변경하지 않는다. 하위 리소스는 includedResources에 포함하고 역할 설명은 subtitle, role, description에 작성한다. 승인 module마다 description, fixedSpecs, grading check를 생성한다.
+승인된 Blueprint가 존재하면 document.modules는 승인된 logicalModules와 동일한 공식 서비스 identity 집합을 사용한다. 승인 module을 생략하거나 승인되지 않은 독립 module을 추가하지 않는다. 각 module의 id는 승인 Blueprint의 module id를 그대로 사용하고, primaryService/service는 공식 AWS 서비스명과 일치시킨다. 제목 표현이 달라도 공식 서비스 identity는 변경하지 않는다. 하위 리소스는 includedResources에 포함하고 역할 설명은 subtitle, role, description에 작성한다. 승인 module마다 description, fixedSpecs, grading check를 생성한다. ECS CodeDeploy Blue/Green Blueprint라면 필수 id는 amazon-ecr, application-load-balancer, amazon-ecs, aws-codedeploy, amazon-cloudwatch이며 그대로 유지한다. Amazon CloudWatch module에는 CloudWatch Alarm, ALB Metric, CodeDeploy Alarm Configuration과 Alarm Name, Namespace, Metric Name, Statistic, Period, Evaluation Periods, Threshold, Comparison Operator, CodeDeploy Deployment Group을 포함하고, Alarm monitoring 및 automatic rollback 연결 behavior check를 생성한다.
 
 재시도 요청에서는 이전 JSON이나 modules를 재사용하지 말고, 새 candidate를 처음부터 생성한다. 재시도 지시에는 검증 오류 메시지만 반영한다. 이전 candidate를 append, merge, 직접 수정하지 않는다.
 

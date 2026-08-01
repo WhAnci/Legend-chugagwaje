@@ -18,11 +18,24 @@ from . import ai_control
 from .completeness import complete_assignment
 from .blueprint import AssignmentBlueprint, check_approved_modules, create_blueprint, validate_blueprint
 from .revision import normalize_issues, repair_references
-from .models import align_modules_to_approved_blueprint
-from .opencode import review_blueprint
+from .models import align_modules_to_approved_blueprint, complete_missing_approved_modules
+from .module_decomposition import official_service
+from .opencode import review_blueprint, disable_for_job
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+class _SecretLogFilter(logging.Filter):
+    def filter(self, record):
+        message = record.getMessage()
+        message = re.sub(r"([?&](?:key|api_key|token|access_token)=)[^&\s]+", r"\1[REDACTED]", message, flags=re.I)
+        message = re.sub(r"(AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})", "[REDACTED]", message)
+        record.msg, record.args = message, ()
+        return True
+_secret_filter = _SecretLogFilter()
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_secret_filter)
 logger = logging.getLogger("aws-task-bot")
 intents = discord.Intents.default(); intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -69,8 +82,18 @@ async def timed_phase(status: discord.Message, label: str, seconds: int):
 async def create_job(raw: str, approved_blueprint: AssignmentBlueprint | None = None):
     logger.info("job request received: %s", raw[:160])
     service = "자동 선정"
-    for candidate in ("EKS", "Kubernetes", "Cognito", "WebSocket", "AppSync", "WAF", "EventBridge", "CloudFront Functions", "Global Accelerator", "Transit Gateway", "PrivateLink", "ECR", "S3", "EC2", "ALB", "Lambda", "VPC", "RDS", "CloudFront", "DynamoDB", "ECS", "IAM"): 
-        if candidate.lower() in raw.lower(): service = candidate; break
+    try:
+        topic = json.loads(raw) if raw.lstrip().startswith("{") else {}
+    except (TypeError, ValueError):
+        topic = {}
+    service = str(topic.get("primaryService", "")).strip()
+    if not service:
+        expected = topic.get("expectedModules", [])
+        if expected and isinstance(expected[0], dict): service = str(expected[0].get("service", "")).strip()
+    if not service:
+        for candidate in ("EKS", "Kubernetes", "Cognito", "WebSocket", "AppSync", "WAF", "EventBridge", "CloudFront Functions", "Global Accelerator", "Transit Gateway", "PrivateLink", "ECR", "S3", "EC2", "ALB", "Lambda", "VPC", "RDS", "CloudFront", "DynamoDB", "ECS", "IAM"):
+            if candidate.lower() in raw.lower(): service = candidate; break
+    service = service or "자동 선정"
     difficulty = "고급" if "고급" in raw else "초급" if "초급" in raw else "중급"
     minutes = int(m.group(1)) if (m := re.search(r"(\d+)\s*분", raw)) else 60
     # 사용자가 리전을 명시하지 않으면 AI가 서비스 특성에 맞는 리전을 선택한다.
@@ -80,7 +103,8 @@ async def create_job(raw: str, approved_blueprint: AssignmentBlueprint | None = 
     # DeepSeek: 요구사항 분석과 산출물 제작을 함께 담당한다. Gemini는 최종 검토만 한다.
     logger.info("generation backend=%s service=%s region=%s", os.getenv("AGENT_BACKEND", "opencode"), service, region or "unset")
     last_errors = []
-    for _ in range(int(os.getenv("MAX_RETRIES", "3")) + 1):
+    targeted_attempted = False
+    for _ in range(min(int(os.getenv("MAX_RETRIES", "3")), 1) + 1):
         retry_raw = raw
         if last_errors:
             retry_payload = {"retryReason": "consistency_validation_failed", "errors": [{"message": error} for error in last_errors]}
@@ -94,13 +118,20 @@ async def create_job(raw: str, approved_blueprint: AssignmentBlueprint | None = 
         if approved_blueprint:
             approved_errors = check_approved_modules(approved_blueprint, draft)
             if approved_errors:
-                draft.notes = "BLUEPRINT_APPROVAL_ERRORS: " + " | ".join(approved_errors)
-                # Alias/title and ID differences are normalized above; only genuine
-                # canonical missing/extra modules are sent to one retry.
-                if _ == 0:
-                    logger.warning("approved module genuinely mismatched: %s", approved_errors)
-                else:
-                    raise GeminiError("동일한 승인 Blueprint module 불일치가 반복되었습니다: " + "; ".join(approved_errors))
+                actual = {official_service(m.primary_service or m.service or m.title).casefold() for m in (draft.document.modules if draft.document else [])}
+                missing_ids = [m.id for m in approved_blueprint.logical_modules if official_service(m.title).casefold() not in actual]
+                if missing_ids and not targeted_attempted:
+                    logger.warning("approved module genuinely missing; targeted completion ids=%s", missing_ids)
+                    targeted_attempted = True
+                    # Any subsequent retry in this job must use Gemini directly.
+                    disable_for_job()
+                    draft = complete_missing_approved_modules(draft, approved_blueprint, missing_ids)
+                    approved_errors = check_approved_modules(approved_blueprint, draft)
+                if approved_errors:
+                    draft.notes = "BLUEPRINT_APPROVAL_ERRORS: " + " | ".join(approved_errors)
+                    if targeted_attempted:
+                        raise GeminiError("동일한 승인 Blueprint module 불일치가 반복되었습니다: " + "; ".join(approved_errors))
+
         logger.info("generation attempt=%d returned title=%s", _ + 1, draft.title)
         result = validate(draft)
         if result.ok:

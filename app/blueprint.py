@@ -457,6 +457,16 @@ def check_approved_modules(blueprint: AssignmentBlueprint, draft: TaskDraft) -> 
     if extra: errors.append(f"승인되지 않은 module이 최종 문서에 추가되었습니다: {sorted(extra)}")
     return errors
 
+def _module_identity_keys(modules):
+    keys = set()
+    for module in modules:
+        keys.add(str(module.id or "").strip().casefold())
+        keys.add(official_service(module.primary_service or module.service or module.title).strip().casefold())
+    return keys
+
+def _canonical_owner(owner):
+    return official_service(str(owner or "").strip()).strip().casefold()
+
 def review_generated_draft(blueprint: AssignmentBlueprint, draft: TaskDraft) -> list[str]:
     errors = []
     if not draft.document: return ["Blueprint Reviewer: document가 없습니다."]
@@ -467,11 +477,18 @@ def review_generated_draft(blueprint: AssignmentBlueprint, draft: TaskDraft) -> 
         aliases = [component.service.lower(), component.resource_type.lower(), component.role.lower()]
         if any(alias in architecture for alias in aliases) and not any(alias in corpus for alias in aliases):
             errors.append(f"아키텍처 구성요소가 module에 없습니다: {component.service}")
+    actual_module_keys = _module_identity_keys(modules)
     for file in blueprint.provided_files:
         matching_files = [f for f in draft.deployment_files if f.path.lower() == file.path.lower()]
-        if matching_files and not any("lambda" in m.service.lower() or "function" in m.title.lower() for m in modules):
-            errors.append(f"지급파일 배포 대상 module이 없습니다: {file.path}")
+        for owner in file.used_by_module:
+            if _canonical_owner(owner) not in actual_module_keys and str(owner).casefold() not in actual_module_keys:
+                errors.append(f"지급파일 사용 module이 최종 문서에 없습니다: {file.path} -> {owner}")
         for deployment in matching_files:
+            for owner in deployment.used_by_module:
+                if _canonical_owner(owner) not in actual_module_keys and str(owner).casefold() not in actual_module_keys:
+                    errors.append(f"지급파일 사용 module이 최종 문서에 없습니다: {deployment.path} -> {owner}")
+            if file.path.lower() == "lambda_function.py" and not any(official_service(m.primary_service or m.service or m.title) == "AWS Lambda" for m in modules):
+                errors.append(f"Lambda 지급파일의 소유 Lambda module이 없습니다: {file.path}")
             code = deployment.content
             env_names = set(re.findall(r"os\.environ(?:\.get)?(?:\(|\[)\s*[\"']([A-Z][A-Z0-9_]+)", code))
             module_text = " ".join(m.model_dump_json() for m in modules).lower()

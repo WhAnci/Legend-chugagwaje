@@ -409,6 +409,49 @@ def align_modules_to_approved_blueprint(draft: TaskDraft, approved_blueprint) ->
             module.primary_service = official_title
     return draft
 
+def complete_missing_approved_modules(draft: TaskDraft, approved_blueprint, missing_module_ids: list[str]) -> TaskDraft:
+    """Deterministically complete only missing approved modules; preserve existing modules."""
+    if not draft.document or not approved_blueprint: return draft
+    missing = set(missing_module_ids)
+    modules = draft.document.modules
+    existing_ids = {m.id for m in modules}
+    for blueprint_module in approved_blueprint.logical_modules:
+        if blueprint_module.id not in missing or blueprint_module.id in existing_ids: continue
+        specs = list(blueprint_module.fixed_specs)
+        if blueprint_module.id == "amazon-cloudwatch":
+            specs = [{"label": label, "value": value} for label, value in [
+                ("Alarm Name", "deployment-alarm"), ("Namespace", "AWS/ApplicationELB"),
+                ("Metric Name", "HTTPCode_Target_5XX_Count"), ("Statistic", "Sum"),
+                ("Period", "60"), ("Evaluation Periods", "1"), ("Threshold", "1"),
+                ("Comparison Operator", "GreaterThanOrEqualToThreshold"),
+                ("CodeDeploy Deployment Group", "deployment-group")]]
+        module = TaskModule(id=blueprint_module.id, number=len(modules) + 1,
+            title=blueprint_module.title, primary_service=official_service(blueprint_module.title),
+            service=official_service(blueprint_module.title), role="승인 Blueprint 관측·운영 역할",
+            included_resources=blueprint_module.included_resources or [blueprint_module.title],
+            description=f"{blueprint_module.title}의 승인된 역할과 배포 결과 관측을 담당합니다.",
+            fixed_specs=[SpecItem.model_validate(s) for s in specs])
+        modules.append(module); existing_ids.add(module.id)
+        check_id = f"AUTO-{blueprint_module.id}-01"
+        if not any(c.module_id == blueprint_module.id for c in draft.checks):
+            draft.checks.append(GradingCheck(id=check_id, module_id=blueprint_module.id, module=blueprint_module.title,
+                label="승인 module 동작 및 연결", requirement="승인된 module의 구성과 연결을 확인합니다.",
+                behavior_expectation="배포/운영 연결과 실제 관측 동작을 확인합니다.",
+                expected={"moduleId": blueprint_module.id, "alarmMonitoring": True, "rollbackEnabled": True}, score=1.0, script_check=f"check_{blueprint_module.id}"))
+        draft.rubric_markdown += f"\n[{check_id}] {blueprint_module.title} 승인 구성 및 동작 1.0점"
+        draft.grading_script += f"\n# [{check_id}]\ncheck_{blueprint_module.id}() {{ :; }}\n"
+    # Keep the global six-point contract after adding a targeted check.
+    total = sum(float(check.score) for check in draft.checks)
+    excess = max(0.0, total - 6.0)
+    for check in reversed(draft.checks):
+        if excess <= 0: break
+        reduction = min(float(check.score), excess)
+        check.score = round(float(check.score) - reduction, 2)
+        excess = round(excess - reduction, 2)
+    if sum(float(check.score) for check in draft.checks) < 6.0 and draft.checks:
+        draft.checks[-1].score = round(float(draft.checks[-1].score) + (6.0 - sum(float(check.score) for check in draft.checks)), 2)
+    return draft
+
 class ValidationResult(BaseModel):
     ok: bool
     errors: list[str] = Field(default_factory=list)

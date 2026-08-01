@@ -7,6 +7,7 @@ from .usage import record as record_usage
 
 class OpenCodeError(RuntimeError): pass
 logger = logging.getLogger("aws-task-opencode")
+_OPEN_CODE_UNAVAILABLE_UNTIL = 0.0
 
 def _json_object(text: str) -> dict:
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.I)
@@ -69,9 +70,11 @@ async def review_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     api_key = os.getenv("OPENCODE_API_KEY", "").strip()
     if not api_key: raise OpenCodeError("OpenCode API 키가 없어 Blueprint 검토를 수행할 수 없습니다.")
     prompt = reviewer_prompt(blueprint) + "\n검토 결과는 JSON 배열만 반환하라. 문제가 없으면 []를 반환하라."
-    timeout = float(os.getenv("OPENCODE_REVIEW_TIMEOUT_SECONDS", "45"))
+    timeout = float(os.getenv("OPENCODE_REVIEW_TIMEOUT_SECONDS", "10"))
     errors = []
-    for model_setting in _models():
+    # Reviewer is advisory-only: one fast attempt, then continue without it.
+    models = _models()[:1]
+    for model_setting in models:
         model_id = model_setting.split("/", 1)[-1]
         body = {"model": model_id, "messages": [{"role": "system", "content": "너는 AWS 과제 Blueprint Reviewer다."}, {"role": "user", "content": prompt}], "temperature": 0}
         try:
@@ -88,10 +91,18 @@ async def review_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
             return result if isinstance(result, list) else [{"errorType": "ReviewerFormat", "severity": "warning", "description": "Reviewer 결과가 배열이 아닙니다."}]
         except Exception as exc:
             errors.append(f"{model_setting}: {repr(exc)[:200]}")
-    raise OpenCodeError("OpenCode Blueprint Reviewer 실패: " + " | ".join(errors[-3:]))
+    logger.warning("OpenCode Blueprint Reviewer unavailable; continuing advisory-only: %s", " | ".join(errors[-1:]))
+    return []
+
+def disable_for_job(seconds: float | None = None):
+    global _OPEN_CODE_UNAVAILABLE_UNTIL
+    _OPEN_CODE_UNAVAILABLE_UNTIL = time.monotonic() + (seconds or float(os.getenv("OPENCODE_CIRCUIT_SECONDS", "300")))
 
 async def generate(req: TaskRequest) -> TaskDraft:
+    global _OPEN_CODE_UNAVAILABLE_UNTIL
     started = time.monotonic(); api_key = os.getenv("OPENCODE_API_KEY", "").strip(); models = _models()
+    if time.monotonic() < _OPEN_CODE_UNAVAILABLE_UNTIL:
+        raise OpenCodeError("OpenCode circuit breaker active; use Gemini fallback")
     logger.info("request start models=%s api_mode=%s prompt_request=%s", ",".join(models), bool(api_key), req.raw[:100])
     if api_key:
         errors = []
@@ -100,7 +111,10 @@ async def generate(req: TaskRequest) -> TaskDraft:
             except OpenCodeError as exc:
                 error_text = str(exc)
                 errors.append(error_text); logger.warning("OpenCode model unavailable; trying next model=%s", model)
-                if "read timeout" in error_text.lower() and os.getenv("OPENCODE_MODEL_FALLBACK_ON_TIMEOUT", "false").lower() != "true":
+                if "timeout" in error_text.lower():
+                    disable_for_job()
+                    break
+                if "read timeout" in error_text.lower():
                     break
         raise OpenCodeError(f"OpenCode 모델을 모두 사용할 수 없습니다(경과 {int(time.monotonic()-started)}s): " + " | ".join(errors[-3:]))
 
