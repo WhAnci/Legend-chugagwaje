@@ -82,6 +82,11 @@ SERVICE_ALIASES = {
 for _entry in AWS_SERVICE_CATALOG:
     SERVICE_ALIASES.setdefault(_entry["canonicalName"], tuple(_entry["aliases"]))
 
+ARCHITECTURE_PATTERNS = {
+    "CLIENT_VPN_PRIVATE_API": {"requiredModules": ["Amazon VPC", "AWS Client VPN", "Amazon API Gateway", "AWS Lambda"]},
+    "SITE_TO_SITE_VPN_MONITORING": {"requiredModules": ["Amazon VPC", "AWS Site-to-Site VPN", "Amazon EventBridge", "AWS Lambda", "Amazon SNS"]},
+}
+
 SERVICE_HINTS = [
     ("AWS Lambda", ("lambda", "함수"), "Function", "실행 코드"),
     ("Amazon S3", ("s3", "버킷"), "Bucket", "객체 저장"),
@@ -108,7 +113,14 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     text = text.split("blueprint 자동 수정 지시", 1)[0]
     scheduler_requested = any(x in text for x in ("eventbridge scheduler", "scheduler", "스케줄러"))
     rotation_requested = "secrets manager" in text or "secret rotation" in text or "자동 교체" in text
+    vpn_terms = ("client vpn", "aws client vpn", "클라이언트 vpn", "원격 접속 vpn", "사용자 접속", "원격 사용자", "인증서", "노트북", "원격 접속", "site-to-site", "site to site", "s2s vpn", "customer gateway", "on-premises", "온프레미스", "터널", "bgp", "virtual private gateway", "transit gateway", "지사")
+    client_vpn = any(x in text for x in ("client vpn", "aws client vpn", "클라이언트 vpn", "원격 접속 vpn", "사용자 접속", "원격 사용자", "인증서", "노트북", "원격 접속"))
+    site_vpn = any(x in text for x in ("site-to-site", "site to site", "s2s vpn", "customer gateway", "on-premises", "온프레미스", "터널", "bgp", "virtual private gateway", "transit gateway", "지사"))
+    vpn_requested = "vpn" in text
+    vpn_pattern = "CLIENT_VPN_PRIVATE_API" if client_vpn and not site_vpn else "SITE_TO_SITE_VPN_MONITORING" if site_vpn and not client_vpn else ""
     architecture_mode = {"type": "EVENTBRIDGE_SCHEDULER_ROTATION" if scheduler_requested else "NATIVE_SECRETS_MANAGER_ROTATION" if rotation_requested else "UNSPECIFIED", "reason": "사용자 요청에 Scheduler가 명시됨" if scheduler_requested else "Secrets Manager Rotation 요구" if rotation_requested else "특정 Rotation 방식 없음"}
+    if vpn_requested and not vpn_pattern:
+        architecture_mode = {"type": "VPN_TYPE_SELECTION_REQUIRED", "choices": [{"id": "CLIENT_VPN_PRIVATE_API", "label": "AWS Client VPN"}, {"id": "SITE_TO_SITE_VPN_MONITORING", "label": "AWS Site-to-Site VPN"}], "reason": "VPN 방식이 명확하지 않아 사용자 선택이 필요합니다."}
     components = []
     for service, hints, resource, role in SERVICE_HINTS:
         if any((re.search(rf"(?<![a-z0-9]){re.escape(hint.lower())}(?![a-z0-9])", text) if re.fullmatch(r"[a-z0-9 -]+", hint.lower()) else hint.lower() in text) for hint in hints):
@@ -152,6 +164,21 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             if owner_component: existing.owner_module_id = owner_component.id
         return existing.owner_module_id or existing.id
 
+    if vpn_pattern:
+        if not any(c.service == "AWS Lambda" for c in components):
+            add_component("aws-lambda", "AWS Lambda", "Function", "VPN 상태·Private API 처리")
+        add_component("amazon-vpc", "Amazon VPC", "VPC", "VPN 연결 대상 네트워크")
+        if vpn_pattern == "CLIENT_VPN_PRIVATE_API":
+            add_component("aws-client-vpn", "AWS Client VPN", "Client VPN Endpoint", "원격 사용자의 VPC 비공개 접근")
+            add_component("amazon-api-gateway", "Amazon API Gateway", "Private REST API", "VPC Endpoint를 통한 Private API")
+            add_component("api-lambda-integration", "Amazon API Gateway", "Lambda Integration", "Private API 요청을 Lambda로 전달", "Amazon API Gateway")
+            add_component("api-lambda-permission", "AWS Lambda", "Resource Permission", "API Gateway의 Lambda 호출 허용", "AWS Lambda")
+        else:
+            add_component("aws-site-to-site-vpn", "AWS Site-to-Site VPN", "VPN Connection", "외부 네트워크와 VPC의 암호화 연결")
+            add_component("amazon-eventbridge", "Amazon EventBridge", "VPN State Change Rule", "VPN 터널 상태 이벤트 라우팅")
+            add_component("eventbridge-lambda-target", "Amazon EventBridge", "Lambda Target", "상태 이벤트를 Lambda로 전달", "Amazon EventBridge")
+            add_component("lambda-invoke-permission", "AWS Lambda", "Resource Permission", "EventBridge의 Lambda 호출 허용", "AWS Lambda")
+            add_component("amazon-sns", "Amazon SNS", "Topic", "VPN 터널 장애 알림")
     ecs_blue_green = any(x in text for x in ("ecs blue", "blue/green", "blue green", "codedeploy", "code deploy", "블루/그린"))
     if ecs_blue_green:
         add_component("amazon-ecr", "Amazon ECR", "Repository", "컨테이너 이미지 저장 및 태그 관리")
@@ -238,7 +265,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         add_component("amazon-cloudwatch", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링")
         add_component("cloudwatch-audit-logs", "Amazon CloudWatch", "Log Group/Alarm", "감사 로그 모니터링", "Amazon CloudWatch")
 
-    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "rotation-schedule", "secrets-rotation-schedule", "secrets-rotation-configuration", "rotation-scheduler-role", "s3-event-notification", "s3-lifecycle-configuration", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy", "ecs-blue-target-group", "ecs-green-target-group", "ecs-production-listener", "ecs-test-listener", "ecs-task-definition", "ecs-service", "codedeploy-rollback", "codedeploy-alarm-connection"}
+    owned_component_ids = {"lambda-execution-role", "cloudwatch-lambda-logs", "lambda-invoke-permission", "api-lambda-integration", "api-lambda-permission", "sns-publish-permission", "rotation-lambda-permission", "rotation-schedule", "secrets-rotation-schedule", "secrets-rotation-configuration", "rotation-scheduler-role", "s3-event-notification", "s3-lifecycle-configuration", "kms-key", "kms-key-policy", "sns-topic", "eventbridge-scan-rule", "cloudtrail-trail", "cloudwatch-audit-logs", "cloudwatch-rotation-logs", "network-firewall-rule-group", "network-firewall-policy", "network-firewall-endpoint", "vpc-routing", "sqs-event-source-mapping", "sqs-dlq", "dynamodb-idempotency-key", "network-firewall-subnet-mapping", "network-firewall-logging", "ec2-subnet", "ec2-security-group", "ec2-instance-profile", "ec2-user-data", "dynamodb-vpc-endpoint", "dynamodb-access-policy", "ecs-blue-target-group", "ecs-green-target-group", "ecs-production-listener", "ecs-test-listener", "ecs-task-definition", "ecs-service", "codedeploy-rollback", "codedeploy-alarm-connection", "eventbridge-lambda-target"}
     modules = [BlueprintModule(id=c.id, title=c.service, component_ids=[c.id]) for c in components if c.service not in {"AWS IAM"} and c.id not in owned_component_ids]
     if any(c.service == "AWS IAM" for c in components) and not any("lambda" in m.title.lower() for m in modules):
         iam_component = next(c for c in components if c.service == "AWS IAM")
@@ -303,7 +330,7 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
             target_title = "AWS CloudTrail" if component.id == "cloudtrail-trail" else "Amazon CloudWatch"
             owner = next((m for m in modules if m.title == target_title), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
-        elif component.id == "eventbridge-scan-rule":
+        elif component.id in {"eventbridge-scan-rule", "eventbridge-lambda-target"}:
             owner = next((m for m in modules if m.title == "Amazon EventBridge"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
     # Generic ownership pass: ownerModuleId is the source of truth for every child component.
@@ -336,12 +363,20 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         ])
     if any(c.service == "AWS Lambda" for c in components) or "lambda_function.py" in text or "lambda" in text or "함수" in text:
         files.append(BlueprintFile(path="lambda_function.py", used_by_module=["aws-lambda"], dependencies=["Function", "Runtime", "Handler", "Execution Role"]))
+    if vpn_pattern == "CLIENT_VPN_PRIVATE_API":
+        files.extend([BlueprintFile(path="client-config-guide.md", used_by_module=["aws-client-vpn"], dependencies=["authentication", "client profile"]), BlueprintFile(path="test-private-api.sh", used_by_module=["aws-client-vpn", "amazon-api-gateway"], dependencies=["VPN connection", "private API request"])])
+    if vpn_pattern == "SITE_TO_SITE_VPN_MONITORING":
+        files.extend([BlueprintFile(path="event-up.json", used_by_module=["amazon-eventbridge", "aws-lambda"], dependencies=["VPN tunnel UP event"]), BlueprintFile(path="event-down.json", used_by_module=["amazon-eventbridge", "aws-lambda"], dependencies=["VPN tunnel DOWN event"])])
     flows = []
     for left, right, action in re.findall(r"([A-Za-z0-9가-힣 ]+)\s*(?:→|->)\s*([A-Za-z0-9가-힣 ]+)(?:\s*[:：]\s*([^,\n]+))?", req.raw):
         flows.append(DataFlow(from_node=left.strip(), to_node=right.strip(), action=(action or "request/data flow").strip()))
     for module in modules:
         module.dependencies = []
-    if ecs_blue_green:
+    if vpn_pattern == "CLIENT_VPN_PRIVATE_API":
+        flows = [DataFlow(from_node="Remote Client", to_node="AWS Client VPN", action="Connect with configured authentication"), DataFlow(from_node="AWS Client VPN", to_node="Amazon VPC", action="Target network association"), DataFlow(from_node="Amazon VPC", to_node="Amazon API Gateway", action="execute-api Interface VPC Endpoint"), DataFlow(from_node="Amazon API Gateway", to_node="AWS Lambda", action="Private Lambda integration"), DataFlow(from_node="AWS Lambda", to_node="Remote Client", action="HTTP response")]
+    elif vpn_pattern == "SITE_TO_SITE_VPN_MONITORING":
+        flows = [DataFlow(from_node="AWS Site-to-Site VPN", to_node="Amazon EventBridge", action="VPN tunnel state change event"), DataFlow(from_node="Amazon EventBridge", to_node="AWS Lambda", action="Filtered event target"), DataFlow(from_node="AWS Lambda", to_node="Amazon SNS", action="VPN tunnel notification"), DataFlow(from_node="AWS Lambda", to_node="Amazon CloudWatch", action="Execution logs")]
+    elif ecs_blue_green:
         flows = [DataFlow(from_node="Developer/CI", to_node="Amazon ECR", action="Push blue/green image"), DataFlow(from_node="Amazon ECR", to_node="Amazon ECS", action="Register Task Definition"), DataFlow(from_node="Amazon ECS", to_node="AWS CodeDeploy", action="Create Deployment"), DataFlow(from_node="AWS CodeDeploy", to_node="Application Load Balancer", action="Test/Production traffic routing"), DataFlow(from_node="Application Load Balancer", to_node="Amazon ECS", action="Route to active Target Group"), DataFlow(from_node="Amazon CloudWatch", to_node="AWS CodeDeploy", action="Alarm-triggered rollback")]
     elif any(c.service == "Amazon SQS" for c in components) and any(c.service == "AWS Lambda" for c in components):
         flows = [DataFlow(from_node="Amazon SQS", to_node="AWS Lambda", action="Event Source Mapping/ReceiveMessage"), DataFlow(from_node="AWS Lambda", to_node="Amazon DynamoDB", action="ConditionalCheck idempotency"), DataFlow(from_node="AWS Lambda", to_node="Amazon SQS DLQ", action="Redrive failed messages")]
@@ -365,6 +400,17 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "AWS KMS" in services: fixed_specs += [{"moduleId": "aws-kms", "field": field} for field in ("Key Alias", "Key Policy", "Encryption Target")]
     if "AWS Secrets Manager" in services: fixed_specs.append({"moduleId": "aws-secrets-manager", "field": "Secret Name/ARN"})
     if "AWS Network Firewall" in services: fixed_specs += [{"moduleId": "aws-network-firewall", "field": field} for field in ("FirewallPolicy", "Stateful RuleGroup", "Firewall Subnet", "SubnetMapping", "LoggingConfiguration", "Route Table/Endpoint")]
+    if vpn_pattern == "CLIENT_VPN_PRIVATE_API":
+        fixed_specs += [{"moduleId": "amazon-vpc", "field": field} for field in ("VPC CIDR", "Private Subnet CIDR", "VPC Endpoint Service Name", "Private DNS Enabled")]
+        fixed_specs += [{"moduleId": "aws-client-vpn", "field": field} for field in ("Client CIDR", "Authentication Type", "Transport Protocol", "VPN Port", "Target Network Association", "Authorization Network")]
+        fixed_specs += [{"moduleId": "amazon-api-gateway", "field": field} for field in ("API Type: PRIVATE", "API Name", "Resource Path", "HTTP Method", "Stage", "Lambda Integration", "VPC Endpoint Resource Policy")]
+        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("Function Name", "Runtime", "Handler", "Timeout", "Execution Role")]
+    if vpn_pattern == "SITE_TO_SITE_VPN_MONITORING":
+        fixed_specs += [{"moduleId": "amazon-vpc", "field": field} for field in ("VPC CIDR", "Virtual Private Gateway or Transit Gateway", "Route Propagation")]
+        fixed_specs += [{"moduleId": "aws-site-to-site-vpn", "field": field} for field in ("Customer Gateway", "VPN Connection", "Tunnel Options", "Routing Configuration")]
+        fixed_specs += [{"moduleId": "amazon-eventbridge", "field": field} for field in ("VPN Tunnel State Change Event Rule", "Lambda Target")]
+        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("Function Name", "Runtime", "Handler", "Execution Role", "EventBridge Invoke Permission")]
+        fixed_specs += [{"moduleId": "amazon-sns", "field": field} for field in ("Topic Name", "VPN Failure Notification")]
     if ecs_blue_green:
         fixed_specs += [{"moduleId": "amazon-ecr", "field": field} for field in ("Repository Name", "Region", "Blue Image Tag", "Green Image Tag", "Scan on Push")]
         fixed_specs += [{"moduleId": "application-load-balancer", "field": field} for field in ("ALB Name", "Production Listener Port", "Test Listener Port", "Blue Target Group Name", "Green Target Group Name", "Target Type", "Target Port", "Health Check Path", "Success Codes")]
@@ -392,6 +438,12 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     for module in modules:
         module.fixed_specs = [spec for spec in fixed_specs if spec.get("moduleId") == module.id]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
+    if vpn_pattern == "CLIENT_VPN_PRIVATE_API":
+        behavior_checks.extend([{"type": "vpn_access", "description": "VPN 연결 전 Private API 접근 거부, 연결 후 API 호출 성공 및 Lambda HTTP 응답 확인"}, {"type": "logs", "description": "Lambda 호출 기록이 CloudWatch Logs에 존재하는지 확인"}])
+    if vpn_pattern == "SITE_TO_SITE_VPN_MONITORING":
+        behavior_checks.extend([{"type": "vpn_event", "description": "EventBridge가 VPN 터널 상태 이벤트를 필터링하고 Lambda를 호출하는지 확인"}, {"type": "notification", "description": "UP/DOWN 테스트 이벤트가 서로 다른 SNS 상태 알림으로 처리되는지 확인"}])
+    if vpn_requested and not vpn_pattern:
+        behavior_checks = [{"type": "architecture_choice", "description": "Client VPN 또는 Site-to-Site VPN 방식 선택 후 조건부 Blueprint를 승인"}]
     if "AWS IAM" in services or "AWS Lambda" in services: behavior_checks.append({"type": "iam", "description": "최소 권한 IAM 정책과 리소스 범위를 검증"})
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
     if any(c.service == "Amazon S3" for c in components) and any(c.service == "AWS Lambda" for c in components):
@@ -416,6 +468,9 @@ def validate_blueprint(blueprint: AssignmentBlueprint) -> list[str]:
     missing = component_ids - mapped
     if missing: errors.append(f"Blueprint 구성요소가 module에 매핑되지 않았습니다: {sorted(missing)}")
     if not blueprint.goal.strip(): errors.append("Blueprint goal이 비어 있습니다.")
+    if blueprint.architecture_mode.get("type") == "VPN_TYPE_SELECTION_REQUIRED":
+        # Conditional approval is valid before a VPN variant is selected.
+        return errors
     if len(blueprint.components) >= 2 and not blueprint.data_flow: errors.append("Blueprint dataFlow가 없습니다.")
     for flow in blueprint.data_flow:
         action = flow.action.lower()

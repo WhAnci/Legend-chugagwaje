@@ -321,6 +321,32 @@ def blueprint_embed(blueprint: AssignmentBlueprint) -> discord.Embed:
     embed.set_footer(text="구성안 승인 후에만 실제 산출물을 생성합니다.")
     return embed
 
+class VPNChoiceView(discord.ui.View):
+    def __init__(self, owner_id: int, message_id: int, raw: str):
+        super().__init__(timeout=900)
+        self.owner_id, self.message_id, self.raw = owner_id, message_id, raw
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id or not has_authorized_role(interaction.user):
+            await interaction.response.send_message("구성안을 만든 사용자와 지정 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return False
+        return True
+
+    async def _choose(self, interaction: discord.Interaction, suffix: str):
+        await interaction.response.defer()
+        await show_blueprint(interaction.message, self.raw + "\n사용자 선택: " + suffix, self.owner_id)
+
+    @discord.ui.button(label="Client VPN", style=discord.ButtonStyle.primary)
+    async def client(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._choose(interaction, "AWS Client VPN")
+
+    @discord.ui.button(label="Site-to-Site VPN", style=discord.ButtonStyle.primary)
+    async def site(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._choose(interaction, "AWS Site-to-Site VPN")
+
+    @discord.ui.button(label="새 구성안", style=discord.ButtonStyle.secondary)
+    async def regenerate(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._choose(interaction, "VPN 방식을 다시 설계")
+
 class BlueprintApprovalView(discord.ui.View):
     def __init__(self, owner_id: int, message_id: int):
         super().__init__(timeout=900)
@@ -377,6 +403,10 @@ async def show_blueprint(message: discord.Message, raw: str, owner_id: int):
     if structural_errors:
         text = "❌ 구성안 구조를 읽을 수 없습니다.\n" + "\n".join(f"- {str(error)[:260]}" for error in structural_errors[:6])
         await message.edit(content=text[:1950], embed=None, view=None)
+        return
+    if blueprint.architecture_mode.get("type") == "VPN_TYPE_SELECTION_REQUIRED":
+        pending_blueprints[message.id] = {"raw": raw, "blueprint": blueprint, "warnings": [], "channel_id": message.channel.id, "owner_id": owner_id, "state": "VPN_TYPE_SELECTION_REQUIRED"}
+        await message.edit(content="⚠️ VPN 방식이 명확하지 않아 구성 선택이 필요합니다. AWS Client VPN 또는 AWS Site-to-Site VPN 중 하나를 선택하세요.", embed=None, view=VPNChoiceView(owner_id, message.id, raw))
         return
     warnings = []
     if os.getenv("LLM_REVIEW_BLOCKING", "false").lower() == "true":
