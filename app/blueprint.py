@@ -266,6 +266,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         module.dependencies = []
     if any(c.service == "Amazon SQS" for c in components) and any(c.service == "AWS Lambda" for c in components):
         flows = [DataFlow(from_node="Amazon SQS", to_node="AWS Lambda", action="Event Source Mapping/ReceiveMessage"), DataFlow(from_node="AWS Lambda", to_node="Amazon DynamoDB", action="ConditionalCheck idempotency"), DataFlow(from_node="AWS Lambda", to_node="Amazon SQS DLQ", action="Redrive failed messages")]
+    elif any(c.service == "Amazon S3" for c in components) and any(c.service == "AWS Lambda" for c in components):
+        flows = [DataFlow(from_node="Amazon S3", to_node="AWS Lambda", action="ObjectCreated Event Notification"), DataFlow(from_node="AWS Lambda", to_node="Amazon SNS", action="Publish"), DataFlow(from_node="AWS Lambda", to_node="Amazon CloudWatch", action="Logs")]
     elif any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")):
         flows = [DataFlow(from_node="Amazon EventBridge Scheduler", to_node="AWS Lambda Rotation", action="Scheduled invocation"), DataFlow(from_node="AWS Lambda Rotation", to_node="AWS Secrets Manager", action="RotateSecret/GetSecretValue"), DataFlow(from_node="AWS Lambda Rotation", to_node="Amazon CloudWatch", action="Audit and failure logs")]
     elif not flows and len(components) >= 2:
@@ -281,14 +283,21 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "AWS Network Firewall" in services: fixed_specs += [{"moduleId": "aws-network-firewall", "field": field} for field in ("FirewallPolicy", "Stateful RuleGroup", "Firewall Subnet", "SubnetMapping", "LoggingConfiguration", "Route Table/Endpoint")]
     if "Amazon EC2" in services: fixed_specs += [{"moduleId": "amazon-ec2", "field": field} for field in ("Subnet", "Security Group", "Instance Profile", "User Data")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Partition Key", "DynamoDB Access Policy")]
-    if "AWS IAM" in services or "AWS Lambda" in services: fixed_specs.append({"moduleId": "aws-lambda", "field": "Least-Privilege IAM Actions"})
     if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("SQS Queue URL/ARN Environment Variable", "AWS_REGION Environment Variable", "Event Source Mapping", "SQS Receive/Delete Permissions", "DLQ/RedrivePolicy")]
+    if "Amazon S3" in services and "AWS Lambda" in services:
+        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("BUCKET_NAME Environment Variable", "S3 Object Trigger", "Handler", "S3 Invoke Permission")]
+        fixed_specs += [{"moduleId": "amazon-s3", "field": field} for field in ("Event Type: s3:ObjectCreated:*", "Lambda Target ARN", "Object Key Filters")]
+        fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("Invoke Principal: s3.amazonaws.com", "Source Bucket ARN", "Action: lambda:InvokeFunction")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Idempotency Key", "Status Field", "TTL", "ConditionalCheck Permission")]
+    if "Amazon SNS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": "SNS_TOPIC_ARN Environment Variable"}, {"moduleId": "amazon-sns", "field": "Topic ARN/Name"}]
     dependencies = [{"from": flow.from_node, "to": flow.to_node, "action": flow.action} for flow in flows]
     for module in modules:
         module.fixed_specs = [spec for spec in fixed_specs if spec.get("moduleId") == module.id]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
+    if "AWS IAM" in services or "AWS Lambda" in services: behavior_checks.append({"type": "iam", "description": "최소 권한 IAM 정책과 리소스 범위를 검증"})
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
+    if any(c.service == "Amazon S3" for c in components) and any(c.service == "AWS Lambda" for c in components):
+        behavior_checks.append({"type": "s3_lambda_e2e", "description": "S3 테스트 객체 업로드 → Event Notification → Lambda 처리/Checksum 검증 → 성공·실패 객체 분기 → CloudWatch 로그 확인"})
     if any(c.service == "AWS Network Firewall" for c in components): behavior_checks.append({"type": "network_behavior", "description": "EC2에서 허용 도메인과 차단 도메인으로 실제 트래픽을 전송하고 Firewall Endpoint 경유·허용/차단·Alert 로그를 검증"})
     if any(c.service == "AWS KMS" for c in components): behavior_checks.append({"type": "behavior", "description": "암호화와 키 정책 적용 검증"})
     goal = str(request_object.get("title") or request_object.get("topic") or req.raw.strip())
