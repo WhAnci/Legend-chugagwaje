@@ -22,6 +22,9 @@ class BlueprintModule(BlueprintModel):
     id: str
     title: str
     component_ids: list[str] = Field(default_factory=list)
+    included_resources: list[str] = Field(default_factory=list)
+    fixed_specs: list[dict] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
 
 class BlueprintFile(BlueprintModel):
     path: str
@@ -250,18 +253,25 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
         elif component.id == "eventbridge-scan-rule":
             owner = next((m for m in modules if m.title == "Amazon EventBridge"), None)
             if owner and component.id not in owner.component_ids: owner.component_ids.append(component.id)
+    for module in modules:
+        module.included_resources = [c.resource_type for c in components if c.id in module.component_ids]
+        module.dependencies = []
     files = []
     if any(c.service == "AWS Lambda" for c in components) or "lambda_function.py" in text or "lambda" in text or "함수" in text:
         files.append(BlueprintFile(path="lambda_function.py", used_by_module=["aws-lambda"], dependencies=["Function", "Runtime", "Handler", "Execution Role"]))
     flows = []
     for left, right, action in re.findall(r"([A-Za-z0-9가-힣 ]+)\s*(?:→|->)\s*([A-Za-z0-9가-힣 ]+)(?:\s*[:：]\s*([^,\n]+))?", req.raw):
         flows.append(DataFlow(from_node=left.strip(), to_node=right.strip(), action=(action or "request/data flow").strip()))
+    for module in modules:
+        module.dependencies = []
     if any(c.service == "Amazon SQS" for c in components) and any(c.service == "AWS Lambda" for c in components):
         flows = [DataFlow(from_node="Amazon SQS", to_node="AWS Lambda", action="Event Source Mapping/ReceiveMessage"), DataFlow(from_node="AWS Lambda", to_node="Amazon DynamoDB", action="ConditionalCheck idempotency"), DataFlow(from_node="AWS Lambda", to_node="Amazon SQS DLQ", action="Redrive failed messages")]
     elif any(x in text for x in ("rotation", "자동 교체", "자동교체", "secret rotation")):
         flows = [DataFlow(from_node="Amazon EventBridge Scheduler", to_node="AWS Lambda Rotation", action="Scheduled invocation"), DataFlow(from_node="AWS Lambda Rotation", to_node="AWS Secrets Manager", action="RotateSecret/GetSecretValue"), DataFlow(from_node="AWS Lambda Rotation", to_node="Amazon CloudWatch", action="Audit and failure logs")]
     elif not flows and len(components) >= 2:
         flows = [DataFlow(from_node=components[i].service, to_node=components[i + 1].service, action="configured integration") for i in range(len(components) - 1)]
+    for module in modules:
+        module.dependencies = [f"{flow.from_node} -> {flow.to_node}: {flow.action}" for flow in flows if any(module.title.lower() in node.lower() for node in (flow.from_node, flow.to_node))]
     fixed_specs = []
     services = {c.service for c in components}
     if "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("Function Name", "Runtime", "Handler", "Code/Provided File", "Execution Role")]
@@ -275,6 +285,8 @@ def create_blueprint(req: TaskRequest) -> AssignmentBlueprint:
     if "Amazon SQS" in services and "AWS Lambda" in services: fixed_specs += [{"moduleId": "aws-lambda", "field": field} for field in ("SQS Queue URL/ARN Environment Variable", "AWS_REGION Environment Variable", "Event Source Mapping", "SQS Receive/Delete Permissions", "DLQ/RedrivePolicy")]
     if "Amazon DynamoDB" in services: fixed_specs += [{"moduleId": "amazon-dynamodb", "field": field} for field in ("Table Name", "Idempotency Key", "Status Field", "TTL", "ConditionalCheck Permission")]
     dependencies = [{"from": flow.from_node, "to": flow.to_node, "action": flow.action} for flow in flows]
+    for module in modules:
+        module.fixed_specs = [spec for spec in fixed_specs if spec.get("moduleId") == module.id]
     behavior_checks = [{"type": "end_to_end", "description": "정상 경로의 실제 데이터 또는 요청 흐름 검증"}]
     if any(c.service == "AWS Lambda" for c in components): behavior_checks.append({"type": "failure_or_security", "description": "Lambda 오류·권한·민감정보 비노출 검증"})
     if any(c.service == "AWS Network Firewall" for c in components): behavior_checks.append({"type": "network_behavior", "description": "EC2에서 허용 도메인과 차단 도메인으로 실제 트래픽을 전송하고 Firewall Endpoint 경유·허용/차단·Alert 로그를 검증"})
