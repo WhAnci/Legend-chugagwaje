@@ -322,18 +322,37 @@ def blueprint_embed(blueprint: AssignmentBlueprint) -> discord.Embed:
     return embed
 
 class VPNChoiceView(discord.ui.View):
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
+        logger.exception("VPN choice view callback error item=%s", item, exc_info=error)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ VPN 선택 처리 중 오류가 발생했습니다.", ephemeral=True)
+        else:
+            try: await interaction.followup.send("❌ VPN 선택 처리 중 오류가 발생했습니다.", ephemeral=True)
+            except Exception: logger.exception("VPN choice error response failed")
+
     def __init__(self, owner_id: int, message_id: int, raw: str):
         super().__init__(timeout=900)
         self.owner_id, self.message_id, self.raw = owner_id, message_id, raw
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        logger.info("vpn architecture interaction received user=%s owner=%s message=%s", interaction.user.id, self.owner_id, self.message_id)
         if interaction.user.id != self.owner_id or not has_authorized_role(interaction.user):
             await interaction.response.send_message("구성안을 만든 사용자와 지정 역할 보유자만 사용할 수 있습니다.", ephemeral=True); return False
         return True
 
     async def _choose(self, interaction: discord.Interaction, suffix: str):
-        await interaction.response.defer()
-        await show_blueprint(interaction.message, self.raw + "\n사용자 선택: " + suffix, self.owner_id)
+        logger.info("vpn architecture choice clicked user=%s message=%s choice=%s", interaction.user.id, self.message_id, suffix)
+        try:
+            await interaction.response.defer()
+            selected_raw = self.raw + "\n사용자 선택: " + suffix
+            await show_blueprint(interaction.message, selected_raw, self.owner_id)
+            logger.info("vpn architecture choice applied message=%s choice=%s", self.message_id, suffix)
+        except Exception as exc:
+            logger.exception("vpn architecture choice failed message=%s choice=%s", self.message_id, suffix)
+            try:
+                await interaction.followup.send(f"❌ VPN 구성안 갱신에 실패했습니다: {type(exc).__name__}", ephemeral=True)
+            except Exception:
+                logger.exception("vpn architecture choice error notification failed")
 
     @discord.ui.button(label="Client VPN", style=discord.ButtonStyle.primary)
     async def client(self, interaction: discord.Interaction, button: discord.ui.Button):
